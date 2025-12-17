@@ -8,6 +8,33 @@ import { urlToBase64 } from '../utils/imageConverter.js';
 import type { GymMember, GymApiResponse, ZKBioPerson } from '../types/index.js';
 
 export class SyncService {
+  private extractZkBioErrorCode(error: unknown): number | null {
+    const message = error instanceof Error ? error.message : String(error);
+    const match = message.match(/\[Code:\s*(-?\d+)\]/);
+    if (!match) return null;
+    const parsed = Number(match[1]);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private isFatalZkBioError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    // Auth / connectivity issues should still stop the sync so we don't loop uselessly.
+    return (
+      message.includes('ZKBio HTTP error: 401') ||
+      message.includes('ZKBio HTTP error: 403') ||
+      message.includes('Unauthorized') ||
+      message.includes('Forbidden') ||
+      message.includes('UNKNOWN DEVICE')
+    );
+  }
+
+  private shouldSkipMemberOnZkBioError(error: unknown): boolean {
+    // Only skip known per-member validation issues by default.
+    const code = this.extractZkBioErrorCode(error);
+    if (code === -62) return true; // Name cannot enter special characters
+    return false;
+  }
+
   async fetchGymMembers(): Promise<GymMember[]> {
     logger.info('Fetching gym members data...');
 
@@ -170,10 +197,30 @@ export class SyncService {
 
     const { firstName, lastName } = parseName(member.fullName);
 
-    if (existingPerson) {
-      await this.updateMemberIfNeeded(member, existingPerson, firstName, lastName, accessLevelIds);
-    } else {
-      await this.createMember(member, firstName, lastName, accessLevelIds);
+    try {
+      if (existingPerson) {
+        await this.updateMemberIfNeeded(member, existingPerson, firstName, lastName, accessLevelIds);
+      } else {
+        await this.createMember(member, firstName, lastName, accessLevelIds);
+      }
+    } catch (error) {
+      // Convert known per-member ZKBio validation errors into "log and continue"
+      if (this.shouldSkipMemberOnZkBioError(error)) {
+        const code = this.extractZkBioErrorCode(error);
+        logger.warn(
+          `Skipping member ${member.turnstileId} (${member.fullName}) due to ZKBio validation error` +
+            (code !== null ? ` [Code: ${code}]` : '') +
+            `: ${(error as Error).message}`
+        );
+        return;
+      }
+
+      if (this.isFatalZkBioError(error)) {
+        throw error;
+      }
+
+      // Default: log and continue for non-fatal member-level errors.
+      logger.error(`Failed processing member ${member.turnstileId} (${member.fullName})`, error as Error);
     }
   }
 
@@ -209,32 +256,28 @@ export class SyncService {
       hasPhotoUrl; // Update if photo URL is provided
 
     if (needsUpdate) {
-      try {
-        let personPhoto: string | undefined;
-        if (hasPhotoUrl && member.profilePictureUrl) {
-          try {
-            personPhoto = await urlToBase64(member.profilePictureUrl);
-            logger.info(`Converted photo URL to base64 for member ${member.turnstileId}`);
-          } catch (error) {
-            const err = error as Error;
-            logger.error(`Failed to convert photo URL to base64 for member ${member.turnstileId}`, err);
-            throw new Error(`Photo conversion failed: ${err.message}`);
-          }
+      let personPhoto: string | undefined;
+      if (hasPhotoUrl && member.profilePictureUrl) {
+        try {
+          personPhoto = await urlToBase64(member.profilePictureUrl);
+          logger.info(`Converted photo URL to base64 for member ${member.turnstileId}`);
+        } catch (error) {
+          const err = error as Error;
+          logger.error(`Failed to convert photo URL to base64 for member ${member.turnstileId}`, err);
+          // Fail this member update (will be handled by processMember)
+          throw new Error(`Photo conversion failed: ${err.message}`);
         }
-
-        await zkbioClient.updatePerson(personPin, {
-          accLevelIds: accessLevelIds,
-          deptCode: config.zkbio.deptCode,
-          name: firstName,
-          lastName: lastName,
-          email: email,
-          mobilePhone: phone,
-          personPhoto: personPhoto,
-        });
-      } catch (error) {
-        logger.error(`Failed to update ${member.turnstileId}`, error as Error);
-        throw error;
       }
+
+      await zkbioClient.updatePerson(personPin, {
+        accLevelIds: accessLevelIds,
+        deptCode: config.zkbio.deptCode,
+        name: firstName,
+        lastName: lastName,
+        email: email,
+        mobilePhone: phone,
+        personPhoto: personPhoto,
+      });
     }
   }
 
@@ -257,6 +300,7 @@ export class SyncService {
       } catch (error) {
         const err = error as Error;
         logger.error(`Failed to convert photo URL to base64 for member ${member.turnstileId}`, err);
+        // Fail this member create (will be handled by processMember)
         throw new Error(`Photo conversion failed: ${err.message}`);
       }
     }
@@ -275,13 +319,10 @@ export class SyncService {
       personPhoto: personPhoto,
     };
 
-    try {
-      await zkbioClient.createOrEditPerson(personData);
-      logger.info(`Created ${member.turnstileId} (${member.fullName}) - access: ${accessLevelIds ? 'granted' : 'revoked'}`);
-    } catch (error) {
-      logger.error(`Failed to create ${member.turnstileId}`, error as Error);
-      throw error;
-    }
+    await zkbioClient.createOrEditPerson(personData);
+    logger.info(
+      `Created ${member.turnstileId} (${member.fullName}) - access: ${accessLevelIds ? 'granted' : 'revoked'}`
+    );
   }
 }
 
