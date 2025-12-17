@@ -1,11 +1,11 @@
 import fetch from 'node-fetch';
-import { config, httpsAgent } from '../config';
-import { logger } from '../utils/logger';
-import { telegramService } from './telegram';
-import { zkbioClient } from './zkbio';
-import { delay, normalizeAccessLevel, parseName } from '../utils/helpers';
-import { urlToBase64 } from '../utils/imageConverter';
-import type { GymMember, GymApiResponse, ZKBioPerson } from '../types';
+import { config, httpsAgent } from '../config/index.js';
+import { logger } from '../utils/logger.js';
+import { telegramService } from './telegram.js';
+import { zkbioClient } from './zkbio.js';
+import { delay, normalizeAccessLevel, parseName } from '../utils/helpers.js';
+import { urlToBase64 } from '../utils/imageConverter.js';
+import type { GymMember, GymApiResponse, ZKBioPerson } from '../types/index.js';
 
 export class SyncService {
   async fetchGymMembers(): Promise<GymMember[]> {

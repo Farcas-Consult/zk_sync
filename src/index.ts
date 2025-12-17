@@ -1,9 +1,9 @@
 import cron from 'node-cron';
-import { config, validateConfig } from './config';
-import { logger } from './utils/logger';
-import { telegramService } from './services/telegram';
-import { syncService } from './services/sync';
-import { formatUptime } from './utils/helpers';
+import { config, validateConfig } from './config/index.js';
+import { logger } from './utils/logger.js';
+import { telegramService } from './services/telegram.js';
+import { syncService } from './services/sync.js';
+import { formatUptime } from './utils/helpers.js';
 
 async function sendHeartbeat(): Promise<void> {
   const now = new Date();

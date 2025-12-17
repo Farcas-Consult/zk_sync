@@ -1,15 +1,15 @@
 import fetch, { type RequestInit as NodeFetchRequestInit } from 'node-fetch';
-import { config, httpsAgent } from '../config';
-import { logger } from '../utils/logger';
-import { telegramService } from './telegram';
-import { delay, chunkArray } from '../utils/helpers';
+import { config, httpsAgent } from '../config/index.js';
+import { logger } from '../utils/logger.js';
+import { telegramService } from './telegram.js';
+import { delay, chunkArray } from '../utils/helpers.js';
 import type {
   ZKBioPerson,
   ZKBioApiResponse,
   ZKBioPersonListResponse,
   PersonListOptions,
   PersonUpdateData,
-} from '../types';
+} from '../types/index.js';
 
 export class ZKBioClient {
   private baseUrl: string;

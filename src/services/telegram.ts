@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
-import { config } from '../config';
-import { logger } from '../utils/logger';
-import type { NotificationType, NotificationState } from '../types';
+import { config } from '../config/index.js';
+import { logger } from '../utils/logger.js';
+import type { NotificationType, NotificationState } from '../types/index.js';
 
 class TelegramService {
   private state: NotificationState = {

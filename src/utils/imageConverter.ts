@@ -1,6 +1,6 @@
 import fetch from 'node-fetch';
-import { httpsAgent } from '../config';
-import { logger } from './logger';
+import { httpsAgent } from '../config/index.js';
+import { logger } from './logger.js';
 
 const IMAGE_FETCH_TIMEOUT = 10000; // 10 seconds
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
