@@ -14,7 +14,13 @@ export function normalizeAccessLevel(level: string | null | undefined): string |
   return level === '' || level === null || level === undefined ? null : level;
 }
 
-export function parseName(fullName: string): { firstName: string; lastName: string } {
+export function parseName(fullName: string | null | undefined): { firstName: string; lastName: string } {
+  if (!fullName || typeof fullName !== 'string') {
+    return {
+      firstName: 'Unknown',
+      lastName: 'Member',
+    };
+  }
   const nameParts = fullName.trim().split(' ');
   return {
     firstName: nameParts[0] || 'Unknown',

@@ -5,6 +5,7 @@ import { telegramService } from './telegram.js';
 import { zkbioClient } from './zkbio.js';
 import { delay, normalizeAccessLevel, parseName } from '../utils/helpers.js';
 import { urlToBase64 } from '../utils/imageConverter.js';
+import { memberIssuesLogger } from '../utils/memberIssuesLogger.js';
 import type { GymMember, GymApiResponse, ZKBioPerson } from '../types/index.js';
 
 export class SyncService {
@@ -32,7 +33,17 @@ export class SyncService {
     // Only skip known per-member validation issues by default.
     const code = this.extractZkBioErrorCode(error);
     if (code === -62) return true; // Name cannot enter special characters
+    if (code === -63) return true; // Face detection failed (no face detected in photo)
     return false;
+  }
+
+  private getErrorType(error: unknown): string {
+    const code = this.extractZkBioErrorCode(error);
+    if (code === -62) return 'name_validation_error';
+    if (code === -63) return 'face_detection_error';
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('Photo conversion failed')) return 'photo_conversion_error';
+    return 'unknown_error';
   }
 
   async fetchGymMembers(): Promise<GymMember[]> {
@@ -166,6 +177,11 @@ export class SyncService {
       const processingMode = `batch processing (${Object.keys(existingPersonsMap).length} from batches)`;
 
       logger.info(`Data sync completed in ${totalTime}s - processed ${members.length} members using ${processingMode}`);
+      
+      const issueCount = memberIssuesLogger.getIssueCount();
+      if (issueCount > 0) {
+        logger.info(`Member issues tracked: ${issueCount} unique issues (see member_issues.json)`);
+      }
     } catch (error) {
       const err = error as Error;
       logger.error('Error occurred during sync', err);
@@ -189,6 +205,19 @@ export class SyncService {
     member: GymMember,
     existingPersonsMap: Record<string, ZKBioPerson>
   ): Promise<void> {
+    // Skip members with invalid/null names
+    if (!member.fullName || typeof member.fullName !== 'string' || member.fullName.trim() === '') {
+      logger.warn(`Skipping member ${member.turnstileId} - invalid or missing fullName`);
+      memberIssuesLogger.logIssue(
+        member.turnstileId,
+        member.fullName,
+        null,
+        'invalid_name',
+        'Invalid or missing fullName'
+      );
+      return;
+    }
+
     const personPin = member.turnstileId.toString();
     const existingPerson = existingPersonsMap[personPin] || null;
 
@@ -204,14 +233,18 @@ export class SyncService {
         await this.createMember(member, firstName, lastName, accessLevelIds);
       }
     } catch (error) {
+      const err = error as Error;
+      const code = this.extractZkBioErrorCode(error);
+      const errorType = this.getErrorType(error);
+
       // Convert known per-member ZKBio validation errors into "log and continue"
       if (this.shouldSkipMemberOnZkBioError(error)) {
-        const code = this.extractZkBioErrorCode(error);
         logger.warn(
           `Skipping member ${member.turnstileId} (${member.fullName}) due to ZKBio validation error` +
             (code !== null ? ` [Code: ${code}]` : '') +
-            `: ${(error as Error).message}`
+            `: ${err.message}`
         );
+        memberIssuesLogger.logIssue(member.turnstileId, member.fullName, code, errorType, err.message);
         return;
       }
 
@@ -220,7 +253,8 @@ export class SyncService {
       }
 
       // Default: log and continue for non-fatal member-level errors.
-      logger.error(`Failed processing member ${member.turnstileId} (${member.fullName})`, error as Error);
+      logger.error(`Failed processing member ${member.turnstileId} (${member.fullName})`, err);
+      memberIssuesLogger.logIssue(member.turnstileId, member.fullName, code, errorType, err.message);
     }
   }
 
