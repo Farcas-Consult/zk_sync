@@ -6,7 +6,7 @@ import { zkbioClient } from './zkbio.js';
 import { delay, normalizeAccessLevel, parseName } from '../utils/helpers.js';
 import { photoCache } from '../utils/photoCache.js';
 import { memberIssuesLogger } from '../utils/memberIssuesLogger.js';
-import { issueReporter } from '../utils/issueReporter.js';
+import { issueReporter, type MemberIssuePayload } from '../utils/issueReporter.js';
 import type { GymMember, GymApiResponse, ZKBioPerson } from '../types/index.js';
 
 export class SyncService {
@@ -118,6 +118,26 @@ export class SyncService {
   async sync(): Promise<void> {
     const startTime = Date.now();
 
+    const runIssues = new Map<string, MemberIssuePayload>();
+    const addRunIssue = (issue: MemberIssuePayload) => {
+      const key = `${issue.turnstileId}:${issue.errorCode ?? 'null'}:${issue.errorType}`;
+      const existing = runIssues.get(key);
+      const now = new Date().toISOString();
+      if (existing) {
+        existing.count = (existing.count ?? 1) + 1;
+        existing.lastSeen = now;
+        existing.errorMessage = issue.errorMessage;
+        if (issue.fullName && !existing.fullName) existing.fullName = issue.fullName;
+      } else {
+        runIssues.set(key, {
+          ...issue,
+          firstSeen: issue.firstSeen ?? now,
+          lastSeen: issue.lastSeen ?? now,
+          count: issue.count ?? 1,
+        });
+      }
+    };
+
     try {
       const members = await this.fetchGymMembers();
       const allPins = members.map((m) => m.turnstileId.toString());
@@ -169,7 +189,7 @@ export class SyncService {
       logger.info(`Processing ${members.length} members with batch data`);
 
       for (const member of members) {
-        await this.processMember(member, existingPersonsMap);
+        await this.processMember(member, existingPersonsMap, addRunIssue);
         await delay(config.sync.operationDelay);
       }
 
@@ -182,6 +202,12 @@ export class SyncService {
       const issueCount = memberIssuesLogger.getIssueCount();
       if (issueCount > 0) {
         logger.info(`Member issues tracked: ${issueCount} unique issues (see member_issues.json)`);
+      }
+
+      // Send aggregated issues for this run
+      const issuesToSend = Array.from(runIssues.values());
+      if (issuesToSend.length > 0) {
+        await issueReporter.reportBatch(issuesToSend);
       }
     } catch (error) {
       const err = error as Error;
@@ -204,7 +230,8 @@ export class SyncService {
 
   private async processMember(
     member: GymMember,
-    existingPersonsMap: Record<string, ZKBioPerson>
+    existingPersonsMap: Record<string, ZKBioPerson>,
+    addRunIssue: (issue: MemberIssuePayload) => void
   ): Promise<void> {
     // Skip members with invalid/null names
     if (!member.fullName || typeof member.fullName !== 'string' || member.fullName.trim() === '') {
@@ -216,7 +243,7 @@ export class SyncService {
         'invalid_name',
         'Invalid or missing fullName'
       );
-      await issueReporter.report({
+      addRunIssue({
         turnstileId: member.turnstileId,
         fullName: member.fullName ?? null,
         errorCode: null,
@@ -253,7 +280,7 @@ export class SyncService {
             `: ${err.message}`
         );
         memberIssuesLogger.logIssue(member.turnstileId, member.fullName, code, errorType, err.message);
-        await issueReporter.report({
+        addRunIssue({
           turnstileId: member.turnstileId,
           fullName: member.fullName,
           errorCode: code,
@@ -270,7 +297,7 @@ export class SyncService {
       // Default: log and continue for non-fatal member-level errors.
       logger.error(`Failed processing member ${member.turnstileId} (${member.fullName})`, err);
       memberIssuesLogger.logIssue(member.turnstileId, member.fullName, code, errorType, err.message);
-      await issueReporter.report({
+      addRunIssue({
         turnstileId: member.turnstileId,
         fullName: member.fullName,
         errorCode: code,
