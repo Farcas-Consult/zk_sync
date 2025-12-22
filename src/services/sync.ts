@@ -4,7 +4,7 @@ import { logger } from '../utils/logger.js';
 import { telegramService } from './telegram.js';
 import { zkbioClient } from './zkbio.js';
 import { delay, normalizeAccessLevel, parseName } from '../utils/helpers.js';
-import { urlToBase64 } from '../utils/imageConverter.js';
+import { photoCache } from '../utils/photoCache.js';
 import { memberIssuesLogger } from '../utils/memberIssuesLogger.js';
 import type { GymMember, GymApiResponse, ZKBioPerson } from '../types/index.js';
 
@@ -293,8 +293,8 @@ export class SyncService {
       let personPhoto: string | undefined;
       if (hasPhotoUrl && member.profilePictureUrl) {
         try {
-          personPhoto = await urlToBase64(member.profilePictureUrl);
-          logger.info(`Converted photo URL to base64 for member ${member.turnstileId}`);
+          personPhoto = await photoCache.getOrFetchBase64(member.turnstileId, member.profilePictureUrl);
+          logger.info(`Converted photo URL to base64 for member ${member.turnstileId} (with cache)`);
         } catch (error) {
           const err = error as Error;
           logger.error(`Failed to convert photo URL to base64 for member ${member.turnstileId}`, err);
@@ -329,8 +329,8 @@ export class SyncService {
     let personPhoto: string | undefined;
     if (member.profilePictureUrl && member.profilePictureUrl !== null && member.profilePictureUrl !== '') {
       try {
-        personPhoto = await urlToBase64(member.profilePictureUrl);
-        logger.info(`Converted photo URL to base64 for member ${member.turnstileId}`);
+        personPhoto = await photoCache.getOrFetchBase64(member.turnstileId, member.profilePictureUrl);
+        logger.info(`Converted photo URL to base64 for member ${member.turnstileId} (with cache)`);
       } catch (error) {
         const err = error as Error;
         logger.error(`Failed to convert photo URL to base64 for member ${member.turnstileId}`, err);

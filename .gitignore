@@ -3,6 +3,7 @@ dist/
 *.log
 log.txt
 member_issues.json
+photo_cache.json
 .env
 .DS_Store
 *.tsbuildinfo
