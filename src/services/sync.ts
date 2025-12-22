@@ -6,6 +6,7 @@ import { zkbioClient } from './zkbio.js';
 import { delay, normalizeAccessLevel, parseName } from '../utils/helpers.js';
 import { photoCache } from '../utils/photoCache.js';
 import { memberIssuesLogger } from '../utils/memberIssuesLogger.js';
+import { issueReporter } from '../utils/issueReporter.js';
 import type { GymMember, GymApiResponse, ZKBioPerson } from '../types/index.js';
 
 export class SyncService {
@@ -215,6 +216,13 @@ export class SyncService {
         'invalid_name',
         'Invalid or missing fullName'
       );
+      await issueReporter.report({
+        turnstileId: member.turnstileId,
+        fullName: member.fullName ?? null,
+        errorCode: null,
+        errorType: 'invalid_name',
+        errorMessage: 'Invalid or missing fullName',
+      });
       return;
     }
 
@@ -245,6 +253,13 @@ export class SyncService {
             `: ${err.message}`
         );
         memberIssuesLogger.logIssue(member.turnstileId, member.fullName, code, errorType, err.message);
+        await issueReporter.report({
+          turnstileId: member.turnstileId,
+          fullName: member.fullName,
+          errorCode: code,
+          errorType,
+          errorMessage: err.message,
+        });
         return;
       }
 
@@ -255,6 +270,13 @@ export class SyncService {
       // Default: log and continue for non-fatal member-level errors.
       logger.error(`Failed processing member ${member.turnstileId} (${member.fullName})`, err);
       memberIssuesLogger.logIssue(member.turnstileId, member.fullName, code, errorType, err.message);
+      await issueReporter.report({
+        turnstileId: member.turnstileId,
+        fullName: member.fullName,
+        errorCode: code,
+        errorType,
+        errorMessage: err.message,
+      });
     }
   }
 

@@ -26,6 +26,10 @@ export const config = {
     batchDelay: parseInt(process.env.SYNC_BATCH_DELAY_MS || '100', 10), // ms between batches
     operationDelay: parseInt(process.env.SYNC_OPERATION_DELAY_MS || '100', 10), // ms between operations
   },
+  issues: {
+    apiUrl: process.env.ISSUE_API_URL || '',
+    apiKey: process.env.ISSUE_API_KEY || '',
+  },
   notifications: {
     heartbeatInterval: 24 * 60 * 60 * 1000, // 1 day
     errorInterval: 5 * 60 * 1000, // 5 minutes
