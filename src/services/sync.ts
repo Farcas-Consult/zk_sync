@@ -3,7 +3,7 @@ import { config, httpsAgent } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { telegramService } from './telegram.js';
 import { zkbioClient } from './zkbio.js';
-import { delay, normalizeAccessLevel, parseName } from '../utils/helpers.js';
+import { delay, normalizeAccessLevel, parseName, isWoman } from '../utils/helpers.js';
 import { photoCache } from '../utils/photoCache.js';
 import { memberIssuesLogger } from '../utils/memberIssuesLogger.js';
 import { issueReporter, type MemberIssuePayload } from '../utils/issueReporter.js';
@@ -257,15 +257,25 @@ export class SyncService {
     const existingPerson = existingPersonsMap[personPin] || null;
 
     const shouldHaveAccess = member.membershipStatus === 'active' && member.isActive === true;
-    const accessLevelIds = shouldHaveAccess ? config.zkbio.gymAccessLevelId : '';
+    
+    // Determine deptCode and accessLevelIds based on gender
+    const isFemale = isWoman(member.gender);
+    const deptCode = isFemale && config.zkbio.womenDeptCode 
+      ? config.zkbio.womenDeptCode 
+      : config.zkbio.deptCode;
+    const accessLevelIds = shouldHaveAccess 
+      ? (isFemale && config.zkbio.womenAccessLevelId 
+          ? config.zkbio.womenAccessLevelId 
+          : config.zkbio.gymAccessLevelId)
+      : '';
 
     const { firstName, lastName } = parseName(member.fullName);
 
     try {
       if (existingPerson) {
-        await this.updateMemberIfNeeded(member, existingPerson, firstName, lastName, accessLevelIds);
+        await this.updateMemberIfNeeded(member, existingPerson, firstName, lastName, accessLevelIds, deptCode);
       } else {
-        await this.createMember(member, firstName, lastName, accessLevelIds);
+        await this.createMember(member, firstName, lastName, accessLevelIds, deptCode);
       }
     } catch (error) {
       const err = error as Error;
@@ -312,7 +322,8 @@ export class SyncService {
     existingPerson: ZKBioPerson,
     firstName: string,
     lastName: string,
-    accessLevelIds: string
+    accessLevelIds: string,
+    deptCode: string
   ): Promise<void> {
     const personPin = member.turnstileId.toString();
     const currentAccessLevel = existingPerson.accLevelIds;
@@ -330,12 +341,15 @@ export class SyncService {
       member.profilePictureUrl !== undefined &&
       member.profilePictureUrl !== '';
 
+    const deptCodeChanged = existingPerson.deptCode !== deptCode;
+
     const needsUpdate =
       existingPerson.name !== firstName ||
       existingPerson.lastName !== lastName ||
       existingPerson.email !== email ||
       existingPerson.mobilePhone !== phone ||
       accessLevelChanged ||
+      deptCodeChanged ||
       hasPhotoUrl; // Update if photo URL is provided
 
     if (needsUpdate) {
@@ -354,7 +368,7 @@ export class SyncService {
 
       await zkbioClient.updatePerson(personPin, {
         accLevelIds: accessLevelIds,
-        deptCode: config.zkbio.deptCode,
+        deptCode: deptCode,
         name: firstName,
         lastName: lastName,
         email: email,
@@ -368,7 +382,8 @@ export class SyncService {
     member: GymMember,
     firstName: string,
     lastName: string,
-    accessLevelIds: string
+    accessLevelIds: string,
+    deptCode: string
   ): Promise<void> {
     if (firstName === 'Unknown') {
       logger.warn(`Cannot create ${member.turnstileId} - invalid name`);
@@ -394,7 +409,7 @@ export class SyncService {
       lastName: lastName,
       email: member.email || `turnstile${member.turnstileId}@${config.gym.emailDomain}`,
       mobilePhone: member.phoneNumber || '',
-      deptCode: config.zkbio.deptCode,
+      deptCode: deptCode,
       accLevelIds: accessLevelIds,
       accStartTime: null,
       accEndTime: null,

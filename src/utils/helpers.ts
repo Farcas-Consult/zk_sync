@@ -34,3 +34,7 @@ export function formatUptime(seconds: number): string {
   return `${hours}h ${minutes}m`;
 }
 
+export function isWoman(gender: 'M' | 'F' | null | undefined): boolean {
+  return gender === 'F';
+}
+

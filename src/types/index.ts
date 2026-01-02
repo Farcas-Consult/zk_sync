@@ -54,6 +54,7 @@ export interface GymMember {
   email?: string;
   phoneNumber?: string;
   profilePictureUrl?: string | null;
+  gender?: 'M' | 'F' | null;
   membershipStatus: string;
   isActive: boolean;
 }

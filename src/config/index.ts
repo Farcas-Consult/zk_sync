@@ -9,6 +9,8 @@ export const config = {
     accessToken: process.env.BIOCV_ACCESS_TOKEN || '',
     gymAccessLevelId: process.env.ZKBIO_ACCESS_LEVEL_ID || '',
     deptCode: process.env.ZKBIO_DEPT_CODE || '1',
+    womenDeptCode: process.env.ZKBIO_WOMEN_DEPT_CODE || '',
+    womenAccessLevelId: process.env.ZKBIO_WOMEN_ACCESS_LEVEL_ID || '',
   },
   gym: {
     apiUrl: process.env.GMS_API_URL || '',
