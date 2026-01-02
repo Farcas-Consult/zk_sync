@@ -343,6 +343,8 @@ export class SyncService {
 
     const deptCodeChanged = existingPerson.deptCode !== deptCode;
 
+    const genderChanged = member.gender !== null && existingPerson.gender !== member.gender;
+
     const needsUpdate =
       existingPerson.name !== firstName ||
       existingPerson.lastName !== lastName ||
@@ -350,6 +352,7 @@ export class SyncService {
       existingPerson.mobilePhone !== phone ||
       accessLevelChanged ||
       deptCodeChanged ||
+      genderChanged ||
       hasPhotoUrl; // Update if photo URL is provided
 
     if (needsUpdate) {
@@ -374,6 +377,7 @@ export class SyncService {
         email: email,
         mobilePhone: phone,
         personPhoto: personPhoto,
+        gender: member.gender || undefined,
       });
     }
   }
@@ -415,6 +419,7 @@ export class SyncService {
       accEndTime: null,
       isSendMail: false,
       personPhoto: personPhoto,
+      gender: member.gender || undefined,
     };
 
     await zkbioClient.createOrEditPerson(personData);

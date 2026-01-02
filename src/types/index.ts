@@ -46,6 +46,7 @@ export interface PersonUpdateData {
   accEndTime?: string | null;
   isDisabled?: boolean;
   personPhoto?: string;
+  gender?: 'M' | 'F';
 }
 
 export interface GymMember {
