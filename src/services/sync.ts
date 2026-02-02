@@ -169,23 +169,6 @@ export class SyncService {
         throw new Error(`Batch processing failed: ${err.message}`);
       }
 
-      if (Object.keys(existingPersonsMap).length === 0 && allPins.length > 0) {
-        const errorMsg = 'Batch processing failed - no individual fallback available';
-        logger.error(errorMsg);
-
-        await telegramService.notify(
-          'batch_processing_required',
-          `<b>Batch Processing Failed</b>\n\n` +
-            `<b>Issue:</b> Batch fetch returned no results\n` +
-            `<b>Expected:</b> ${allPins.length} members\n` +
-            `<b>Action:</b> Sync stopped - requires batch processing\n\n` +
-            `Please check ZKBio server status and API configuration.`,
-          'batch_required'
-        );
-
-        throw new Error(errorMsg);
-      }
-
       logger.info(`Processing ${members.length} members with batch data`);
 
       for (const member of members) {
