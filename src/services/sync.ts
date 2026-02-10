@@ -5,9 +5,10 @@ import { telegramService } from './telegram.js';
 import { delay, isWoman } from '../utils/helpers.js';
 import { memberIssuesLogger } from '../utils/memberIssuesLogger.js';
 import { issueReporter, type MemberIssuePayload } from '../utils/issueReporter.js';
-import type { GymMember, GymApiResponse } from '../types/index.js';
+import type { GymMember } from '../types/index.js';
 import type { AccessControlClient, AccessControlPersonSnapshot } from './accessControl.js';
 import { accessControlClient } from './accessControlFactory.js';
+import { createGymAdapter } from './gymAdapter.js';
 
 export class SyncService {
   constructor(private readonly accessClient: AccessControlClient) {}
@@ -45,10 +46,11 @@ export class SyncService {
       throw new Error(errorMsg);
     }
 
-    const apiResponse = (await response.json()) as GymApiResponse;
+    const apiResponse = await response.json();
+    const adapter = createGymAdapter(config.gym.apiSource);
 
-    if (!apiResponse.success || !Array.isArray(apiResponse.data)) {
-      const msg = `Gym API response invalid format: ${JSON.stringify(apiResponse)}`;
+    if (!adapter.validateResponse(apiResponse)) {
+      const msg = `Gym API response invalid format for source: ${config.gym.apiSource}`;
       logger.error(msg);
       console.error('Gym API response:', JSON.stringify(apiResponse, null, 2));
 
@@ -56,6 +58,7 @@ export class SyncService {
         'api_error',
         `<b>API Response Error</b>\n\n` +
           `<b>Issue:</b> Invalid response format\n` +
+          `<b>Source:</b> ${config.gym.apiSource}\n` +
           `<b>URL:</b> ${config.gym.apiUrl}\n\n` +
           `API returned unexpected data structure.`,
         'invalid_response'
@@ -64,7 +67,8 @@ export class SyncService {
       throw new Error(msg);
     }
 
-    logger.info(`Found ${apiResponse.data.length} members in gym system`);
+    const members = adapter.transform(apiResponse);
+    logger.info(`Found ${members.length} members in gym system (source: ${config.gym.apiSource})`);
 
     if (telegramService.getAuthFailures() > 0) {
       telegramService.resetAuthFailures();
@@ -72,12 +76,12 @@ export class SyncService {
         'recovery',
         `<b>Connection Restored</b>\n\n` +
           `<b>Service:</b> Gym API\n` +
-          `<b>Members Found:</b> ${apiResponse.data.length}\n\n` +
+          `<b>Members Found:</b> ${members.length}\n\n` +
           `System is back online and functioning normally.`
       );
     }
 
-    return apiResponse.data;
+    return members;
   }
 
   async sync(): Promise<void> {

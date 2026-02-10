@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import https from 'https';
+import type { GymApiSource } from '../types/index.js';
 
 dotenv.config();
 
@@ -27,6 +28,7 @@ export const config = {
   gym: {
     apiUrl: process.env.GMS_API_URL || '',
     apiKey: process.env.GMS_API_KEY || '',
+    apiSource: (process.env.GYM_API_SOURCE || 'fitness254') as GymApiSource,
     name: process.env.GYM_NAME || 'Gym',
     emailDomain: process.env.GYM_EMAIL_DOMAIN || 'gym.local',
   },

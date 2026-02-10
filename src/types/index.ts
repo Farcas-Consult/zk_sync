@@ -65,6 +65,30 @@ export interface GymApiResponse {
   data: GymMember[];
 }
 
+export interface GymMasterMember {
+  id: number;
+  firstname: string;
+  surname: string;
+  dob?: string;
+  email?: string;
+  gender?: 'M' | 'F';
+  phonecell?: string;
+  phonehome?: string | null;
+  phonework?: string | null;
+  joindate: string;
+  owing: string;
+  status: string;
+  memberphoto?: string;
+  company_name?: string;
+  [key: string]: unknown;
+}
+
+export interface GymMasterApiResponse {
+  result: GymMasterMember[];
+}
+
+export type GymApiSource = 'fitness254' | 'gymmaster';
+
 export interface NotificationState {
   lastMessages: Record<string, number>;
   lastHeartbeat: number;
