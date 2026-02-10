@@ -91,9 +91,6 @@ export function validateConfig(): void {
   if (!config.gym.apiUrl) {
     errors.push('GMS_API_URL is required');
   }
-  if (!config.gym.apiKey) {
-    errors.push('GMS_API_KEY is required');
-  }
 
   if (errors.length > 0) {
     throw new Error(`Configuration errors:\n${errors.join('\n')}`);
