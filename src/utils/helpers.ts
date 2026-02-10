@@ -14,6 +14,23 @@ export function normalizeAccessLevel(level: string | null | undefined): string |
   return level === '' || level === null || level === undefined ? null : level;
 }
 
+export function accessLevelsEqual(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
+  const idsA = (normalizeAccessLevel(a) || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .sort();
+  const idsB = (normalizeAccessLevel(b) || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .sort();
+  return idsA.length === idsB.length && idsA.every((id, i) => id === idsB[i]);
+}
+
 export function parseName(fullName: string | null | undefined): { firstName: string; lastName: string } {
   if (!fullName || typeof fullName !== 'string') {
     return {

@@ -1,7 +1,7 @@
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { photoCache } from '../utils/photoCache.js';
-import { normalizeAccessLevel, parseName } from '../utils/helpers.js';
+import { accessLevelsEqual, normalizeAccessLevel, parseName } from '../utils/helpers.js';
 import { memberIssuesLogger } from '../utils/memberIssuesLogger.js';
 import type { GymMember, ZKBioPerson } from '../types/index.js';
 import { zkbioClient } from './zkbio.js';
@@ -160,8 +160,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
   ): Promise<void> {
     const personPin = member.turnstileId.toString();
     const currentAccessLevel = existingPerson.accLevelIds;
-    const accessLevelChanged =
-      normalizeAccessLevel(currentAccessLevel) !== normalizeAccessLevel(accessLevelIds);
+    const accessLevelChanged = !accessLevelsEqual(currentAccessLevel, accessLevelIds);
 
     const email = member.email || `turnstile${member.turnstileId}@${config.gym.emailDomain}`;
     const phone = member.phoneNumber || '';
@@ -170,6 +169,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
       member.profilePictureUrl !== null &&
       member.profilePictureUrl !== undefined &&
       member.profilePictureUrl !== '';
+    const needsPhotoUpdate = hasPhotoUrl && !existingPerson.personPhoto;
 
     const deptCodeChanged = existingPerson.deptCode !== deptCode;
     const genderChanged = member.gender !== null && existingPerson.gender !== member.gender;
@@ -182,7 +182,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
       accessLevelChanged ||
       deptCodeChanged ||
       genderChanged ||
-      hasPhotoUrl;
+      needsPhotoUpdate;
 
     if (!needsUpdate) {
       return;
