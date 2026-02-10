@@ -2,50 +2,15 @@ import fetch from 'node-fetch';
 import { config, httpsAgent } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { telegramService } from './telegram.js';
-import { zkbioClient } from './zkbio.js';
-import { delay, normalizeAccessLevel, parseName, isWoman } from '../utils/helpers.js';
-import { photoCache } from '../utils/photoCache.js';
+import { delay, isWoman } from '../utils/helpers.js';
 import { memberIssuesLogger } from '../utils/memberIssuesLogger.js';
 import { issueReporter, type MemberIssuePayload } from '../utils/issueReporter.js';
-import type { GymMember, GymApiResponse, ZKBioPerson } from '../types/index.js';
+import type { GymMember, GymApiResponse } from '../types/index.js';
+import type { AccessControlClient, AccessControlPersonSnapshot } from './accessControl.js';
+import { accessControlClient } from './accessControlFactory.js';
 
 export class SyncService {
-  private extractZkBioErrorCode(error: unknown): number | null {
-    const message = error instanceof Error ? error.message : String(error);
-    const match = message.match(/\[Code:\s*(-?\d+)\]/);
-    if (!match) return null;
-    const parsed = Number(match[1]);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  private isFatalZkBioError(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error);
-    // Auth / connectivity issues should still stop the sync so we don't loop uselessly.
-    return (
-      message.includes('ZKBio HTTP error: 401') ||
-      message.includes('ZKBio HTTP error: 403') ||
-      message.includes('Unauthorized') ||
-      message.includes('Forbidden') ||
-      message.includes('UNKNOWN DEVICE')
-    );
-  }
-
-  private shouldSkipMemberOnZkBioError(error: unknown): boolean {
-    // Only skip known per-member validation issues by default.
-    const code = this.extractZkBioErrorCode(error);
-    if (code === -62) return true; // Name cannot enter special characters
-    if (code === -63) return true; // Face detection failed (no face detected in photo)
-    return false;
-  }
-
-  private getErrorType(error: unknown): string {
-    const code = this.extractZkBioErrorCode(error);
-    if (code === -62) return 'name_validation_error';
-    if (code === -63) return 'face_detection_error';
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes('Photo conversion failed')) return 'photo_conversion_error';
-    return 'unknown_error';
-  }
+  constructor(private readonly accessClient: AccessControlClient) {}
 
   async fetchGymMembers(): Promise<GymMember[]> {
     logger.info('Fetching gym members data...');
@@ -140,17 +105,19 @@ export class SyncService {
 
     try {
       const members = await this.fetchGymMembers();
-      const allPins = members.map((m) => m.turnstileId.toString());
+      const allExternalIds = members.map((m) => m.turnstileId.toString());
 
-      logger.info(`Preparing to batch fetch ${allPins.length} persons from ZKBio`);
+      logger.info(
+        `Preparing to batch fetch ${allExternalIds.length} persons from access provider: ${this.accessClient.vendor}`
+      );
 
-      let existingPersonsMap: Record<string, ZKBioPerson> = {};
+      let existingSnapshots: Record<string, AccessControlPersonSnapshot> = {};
 
       try {
-        existingPersonsMap = await zkbioClient.getBatchPersons(allPins, config.sync.batchSize);
-        const batchWorked = Object.keys(existingPersonsMap).length > 0 || allPins.length === 0;
+        existingSnapshots = await this.accessClient.prefetchExistingPersons(allExternalIds);
+        const batchWorked = Object.keys(existingSnapshots).length > 0 || allExternalIds.length === 0;
 
-        if (!batchWorked && allPins.length > 0) {
+        if (!batchWorked && allExternalIds.length > 0) {
           logger.warn('Batch processing returned no results for existing members');
         }
       } catch (error) {
@@ -160,6 +127,7 @@ export class SyncService {
         await telegramService.notify(
           'batch_fetch_error',
           `<b>Batch Fetch Error</b>\n\n` +
+            `<b>Provider:</b> ${this.accessClient.vendor}\n` +
             `<b>Error:</b> ${err.message}\n` +
             `<b>Action:</b> Stopping sync - batch processing required\n\n` +
             `Please check server status and configuration.`,
@@ -169,23 +137,30 @@ export class SyncService {
         throw new Error(`Batch processing failed: ${err.message}`);
       }
 
-      logger.info(`Processing ${members.length} members with batch data`);
+      logger.info(`Processing ${members.length} members with batch data for provider ${this.accessClient.vendor}`);
 
       for (const member of members) {
-        await this.processMember(member, existingPersonsMap, addRunIssue);
+        await this.processMember(member, existingSnapshots, addRunIssue);
         await delay(config.sync.operationDelay);
       }
 
       const endTime = Date.now();
       const totalTime = ((endTime - startTime) / 1000).toFixed(2);
-      const processingMode = `batch processing (${Object.keys(existingPersonsMap).length} from batches)`;
+      const processingMode = `batch processing with provider ${this.accessClient.vendor} (${Object.keys(
+        existingSnapshots
+      ).length} from batches)`;
 
-      logger.info(`Data sync completed in ${totalTime}s - processed ${members.length} members using ${processingMode}`);
+      logger.info(
+        `Data sync completed in ${totalTime}s - processed ${members.length} members using ${processingMode}`
+      );
       
       const issueCount = memberIssuesLogger.getIssueCount();
       if (issueCount > 0) {
         logger.info(`Member issues tracked: ${issueCount} unique issues (see member_issues.json)`);
       }
+
+      // Flush provider-specific changes (e.g. Hikvision auth reapplication)
+      await this.accessClient.flushChanges();
 
       // Send aggregated issues for this run
       const issuesToSend = Array.from(runIssues.values());
@@ -213,7 +188,7 @@ export class SyncService {
 
   private async processMember(
     member: GymMember,
-    existingPersonsMap: Record<string, ZKBioPerson>,
+    existingSnapshots: Record<string, AccessControlPersonSnapshot>,
     addRunIssue: (issue: MemberIssuePayload) => void
   ): Promise<void> {
     // Skip members with invalid/null names
@@ -236,181 +211,45 @@ export class SyncService {
       return;
     }
 
-    const personPin = member.turnstileId.toString();
-    const existingPerson = existingPersonsMap[personPin] || null;
+    const externalId = member.turnstileId.toString();
+    const existingSnapshot = existingSnapshots[externalId] || null;
 
     const shouldHaveAccess = member.membershipStatus === 'active' && member.isActive === true;
-    
-    // Determine deptCode and accessLevelIds based on gender
     const isFemale = isWoman(member.gender);
-    const deptCode = isFemale && config.zkbio.womenDeptCode 
-      ? config.zkbio.womenDeptCode 
-      : config.zkbio.deptCode;
-    const accessLevelIds = shouldHaveAccess 
-      ? (isFemale && config.zkbio.womenAccessLevelId 
-          ? config.zkbio.womenAccessLevelId 
-          : config.zkbio.gymAccessLevelId)
-      : '';
 
-    const { firstName, lastName } = parseName(member.fullName);
+    const context = {
+      shouldHaveAccess,
+      isFemale,
+    };
 
     try {
-      if (existingPerson) {
-        await this.updateMemberIfNeeded(member, existingPerson, firstName, lastName, accessLevelIds, deptCode);
-      } else {
-        await this.createMember(member, firstName, lastName, accessLevelIds, deptCode);
-      }
+      await this.accessClient.ensureMember(member, existingSnapshot, context);
     } catch (error) {
-      const err = error as Error;
-      const code = this.extractZkBioErrorCode(error);
-      const errorType = this.getErrorType(error);
+      const clientWithHandler = this.accessClient as AccessControlClient & {
+        handleMemberError?: (
+          member: GymMember,
+          error: unknown,
+          addRunIssue: (issue: MemberIssuePayload) => void
+        ) => Promise<void>;
+      };
 
-      // Convert known per-member ZKBio validation errors into "log and continue"
-      if (this.shouldSkipMemberOnZkBioError(error)) {
-        logger.warn(
-          `Skipping member ${member.turnstileId} (${member.fullName}) due to ZKBio validation error` +
-            (code !== null ? ` [Code: ${code}]` : '') +
-            `: ${err.message}`
-        );
-        memberIssuesLogger.logIssue(member.turnstileId, member.fullName, code, errorType, err.message);
+      if (clientWithHandler.handleMemberError) {
+        await clientWithHandler.handleMemberError(member, error, addRunIssue);
+      } else {
+        const err = error as Error;
+        logger.error(`Failed processing member ${member.turnstileId} (${member.fullName})`, err);
+        memberIssuesLogger.logIssue(member.turnstileId, member.fullName, null, 'unknown_error', err.message);
         addRunIssue({
           turnstileId: member.turnstileId,
           fullName: member.fullName,
-          errorCode: code,
-          errorType,
+          errorCode: null,
+          errorType: 'unknown_error',
           errorMessage: err.message,
         });
-        return;
-      }
-
-      if (this.isFatalZkBioError(error)) {
-        throw error;
-      }
-
-      // Default: log and continue for non-fatal member-level errors.
-      logger.error(`Failed processing member ${member.turnstileId} (${member.fullName})`, err);
-      memberIssuesLogger.logIssue(member.turnstileId, member.fullName, code, errorType, err.message);
-      addRunIssue({
-        turnstileId: member.turnstileId,
-        fullName: member.fullName,
-        errorCode: code,
-        errorType,
-        errorMessage: err.message,
-      });
-    }
-  }
-
-  private async updateMemberIfNeeded(
-    member: GymMember,
-    existingPerson: ZKBioPerson,
-    firstName: string,
-    lastName: string,
-    accessLevelIds: string,
-    deptCode: string
-  ): Promise<void> {
-    const personPin = member.turnstileId.toString();
-    const currentAccessLevel = existingPerson.accLevelIds;
-    const accessLevelChanged =
-      normalizeAccessLevel(currentAccessLevel) !== normalizeAccessLevel(accessLevelIds);
-
-    const email = member.email || `turnstile${member.turnstileId}@${config.gym.emailDomain}`;
-    const phone = member.phoneNumber || '';
-
-    // Check if photo needs updating
-    // Only update if a photo URL is provided (not null/undefined/empty)
-    // We don't compare with existing photo since we don't store the original URL
-    const hasPhotoUrl =
-      member.profilePictureUrl !== null &&
-      member.profilePictureUrl !== undefined &&
-      member.profilePictureUrl !== '';
-
-    const deptCodeChanged = existingPerson.deptCode !== deptCode;
-
-    const genderChanged = member.gender !== null && existingPerson.gender !== member.gender;
-
-    const needsUpdate =
-      existingPerson.name !== firstName ||
-      existingPerson.lastName !== lastName ||
-      existingPerson.email !== email ||
-      existingPerson.mobilePhone !== phone ||
-      accessLevelChanged ||
-      deptCodeChanged ||
-      genderChanged ||
-      hasPhotoUrl; // Update if photo URL is provided
-
-    if (needsUpdate) {
-      let personPhoto: string | undefined;
-      if (hasPhotoUrl && member.profilePictureUrl) {
-        try {
-          personPhoto = await photoCache.getOrFetchBase64(member.turnstileId, member.profilePictureUrl);
-          logger.info(`Converted photo URL to base64 for member ${member.turnstileId} (with cache)`);
-        } catch (error) {
-          const err = error as Error;
-          logger.error(`Failed to convert photo URL to base64 for member ${member.turnstileId}`, err);
-          // Fail this member update (will be handled by processMember)
-          throw new Error(`Photo conversion failed: ${err.message}`);
-        }
-      }
-
-      await zkbioClient.updatePerson(personPin, {
-        accLevelIds: accessLevelIds,
-        deptCode: deptCode,
-        name: firstName,
-        lastName: lastName,
-        email: email,
-        mobilePhone: phone,
-        personPhoto: personPhoto,
-        gender: member.gender || undefined,
-      });
-    }
-  }
-
-  private async createMember(
-    member: GymMember,
-    firstName: string,
-    lastName: string,
-    accessLevelIds: string,
-    deptCode: string
-  ): Promise<void> {
-    if (firstName === 'Unknown') {
-      logger.warn(`Cannot create ${member.turnstileId} - invalid name`);
-      return;
-    }
-
-    let personPhoto: string | undefined;
-    if (member.profilePictureUrl && member.profilePictureUrl !== null && member.profilePictureUrl !== '') {
-      try {
-        personPhoto = await photoCache.getOrFetchBase64(member.turnstileId, member.profilePictureUrl);
-        logger.info(`Converted photo URL to base64 for member ${member.turnstileId} (with cache)`);
-      } catch (error) {
-        const err = error as Error;
-        logger.error(`Failed to convert photo URL to base64 for member ${member.turnstileId}`, err);
-        // Fail this member create (will be handled by processMember)
-        throw new Error(`Photo conversion failed: ${err.message}`);
       }
     }
-
-    const personData = {
-      pin: member.turnstileId.toString(),
-      name: firstName,
-      lastName: lastName,
-      email: member.email || `turnstile${member.turnstileId}@${config.gym.emailDomain}`,
-      mobilePhone: member.phoneNumber || '',
-      deptCode: deptCode,
-      accLevelIds: accessLevelIds,
-      accStartTime: null,
-      accEndTime: null,
-      isSendMail: false,
-      personPhoto: personPhoto,
-      gender: member.gender || undefined,
-    };
-
-    await zkbioClient.createOrEditPerson(personData);
-    logger.info(
-      `Created ${member.turnstileId} (${member.fullName}) - access: ${accessLevelIds ? 'granted' : 'revoked'}`
-    );
   }
 }
 
-export const syncService = new SyncService();
+export const syncService = new SyncService(accessControlClient);
 

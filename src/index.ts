@@ -89,16 +89,22 @@ function setupGracefulShutdown(): void {
 
 async function main(): Promise<void> {
   try {
-    logger.info(`Starting ${config.gym.name} integration...`);
+    logger.info(`Starting ${config.gym.name} integration with ${config.accessControl.vendor}...`);
 
     validateConfig();
 
-    logger.info(`Connecting to ZKBioCVSecurity at: ${config.zkbio.baseUrl}`);
+    if (config.accessControl.vendor === 'zkbio') {
+      logger.info(`Connecting to ZKBioCVSecurity at: ${config.zkbio.baseUrl}`);
+    } else if (config.accessControl.vendor === 'hikvision') {
+      logger.info(`Connecting to Hikvision HikCentral at: ${config.hikvision.baseUrl}`);
+    }
 
     await telegramService.notify(
       'startup',
       `<b>${config.gym.name} - Started</b>\n\n` +
-        `<b>ZKBio Server:</b> ${config.zkbio.baseUrl}\n` +
+        (config.accessControl.vendor === 'zkbio'
+          ? `<b>ZKBio Server:</b> ${config.zkbio.baseUrl}\n`
+          : `<b>HikCentral Server:</b> ${config.hikvision.baseUrl}\n`) +
         `<b>Gym API:</b> ${config.gym.apiUrl}\n` +
         `<b>Start Time:</b> ${new Date().toLocaleString()}\n` +
         `<b>Sync Interval:</b> Every ${config.sync.interval / 1000} seconds\n` +
