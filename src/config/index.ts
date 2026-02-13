@@ -1,9 +1,13 @@
 import dotenv from 'dotenv';
 import https from 'https';
+import type { GymApiSource } from '../types/index.js';
 
 dotenv.config();
 
 export const config = {
+  accessControl: {
+    vendor: (process.env.ACCESS_CONTROL_VENDOR || 'zkbio') as 'zkbio' | 'hikvision',
+  },
   zkbio: {
     baseUrl: process.env.BIOCV_BASE_URL || '',
     accessToken: process.env.BIOCV_ACCESS_TOKEN || '',
@@ -12,9 +16,19 @@ export const config = {
     womenDeptCode: process.env.ZKBIO_WOMEN_DEPT_CODE || '',
     womenAccessLevelId: process.env.ZKBIO_WOMEN_ACCESS_LEVEL_ID || '',
   },
+  hikvision: {
+    baseUrl: process.env.HIK_BASE_URL || '',
+    appKey: process.env.HIK_APP_KEY || '',
+    appSecret: process.env.HIK_APP_SECRET || '',
+    orgIndexCode: process.env.HIK_ORG_INDEX_CODE || '',
+    womenOrgIndexCode: process.env.HIK_WOMEN_ORG_INDEX_CODE || '',
+    privilegeGroupId: process.env.HIK_PRIVILEGE_GROUP_ID || '',
+    womenPrivilegeGroupId: process.env.HIK_WOMEN_PRIVILEGE_GROUP_ID || '',
+  },
   gym: {
     apiUrl: process.env.GMS_API_URL || '',
     apiKey: process.env.GMS_API_KEY || '',
+    apiSource: (process.env.GYM_API_SOURCE || 'fitness254') as GymApiSource,
     name: process.env.GYM_NAME || 'Gym',
     emailDomain: process.env.GYM_EMAIL_DOMAIN || 'gym.local',
   },
@@ -47,20 +61,35 @@ export const httpsAgent = new https.Agent({
 export function validateConfig(): void {
   const errors: string[] = [];
 
-  if (!config.zkbio.baseUrl) {
-    errors.push('BIOCV_BASE_URL is required');
-  }
-  if (!config.zkbio.accessToken) {
-    errors.push('BIOCV_ACCESS_TOKEN is required');
-  }
-  if (!config.zkbio.gymAccessLevelId) {
-    errors.push('ZKBIO_ACCESS_LEVEL_ID is required');
+  if (config.accessControl.vendor === 'zkbio') {
+    if (!config.zkbio.baseUrl) {
+      errors.push('BIOCV_BASE_URL is required');
+    }
+    if (!config.zkbio.accessToken) {
+      errors.push('BIOCV_ACCESS_TOKEN is required');
+    }
+    if (!config.zkbio.gymAccessLevelId) {
+      errors.push('ZKBIO_ACCESS_LEVEL_ID is required');
+    }
+  } else if (config.accessControl.vendor === 'hikvision') {
+    if (!config.hikvision.baseUrl) {
+      errors.push('HIK_BASE_URL is required when ACCESS_CONTROL_VENDOR=hikvision');
+    }
+    if (!config.hikvision.appKey) {
+      errors.push('HIK_APP_KEY is required when ACCESS_CONTROL_VENDOR=hikvision');
+    }
+    if (!config.hikvision.appSecret) {
+      errors.push('HIK_APP_SECRET is required when ACCESS_CONTROL_VENDOR=hikvision');
+    }
+    if (!config.hikvision.orgIndexCode) {
+      errors.push('HIK_ORG_INDEX_CODE is required when ACCESS_CONTROL_VENDOR=hikvision');
+    }
+    if (!config.hikvision.privilegeGroupId) {
+      errors.push('HIK_PRIVILEGE_GROUP_ID is required when ACCESS_CONTROL_VENDOR=hikvision');
+    }
   }
   if (!config.gym.apiUrl) {
     errors.push('GMS_API_URL is required');
-  }
-  if (!config.gym.apiKey) {
-    errors.push('GMS_API_KEY is required');
   }
 
   if (errors.length > 0) {
