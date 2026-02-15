@@ -1,7 +1,7 @@
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { photoCache } from '../utils/photoCache.js';
-import { accessLevelsEqual, normalizeAccessLevel, parseName } from '../utils/helpers.js';
+import { accessLevelsEqual, normalizeAccessLevel, normalizeString, parseName } from '../utils/helpers.js';
 import { memberIssuesLogger } from '../utils/memberIssuesLogger.js';
 import type { GymMember, ZKBioPerson } from '../types/index.js';
 import { zkbioClient } from './zkbio.js';
@@ -158,6 +158,12 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     const email = member.email || `turnstile${member.turnstileId}@${config.gym.emailDomain}`;
     const phone = member.phoneNumber || '';
 
+    // Normalize for comparison to handle null/undefined/empty equivalently
+    const emailChanged = normalizeString(existingPerson.email) !== normalizeString(email);
+    const phoneChanged = normalizeString(existingPerson.mobilePhone) !== normalizeString(phone);
+    const nameChanged = normalizeString(existingPerson.name) !== normalizeString(firstName);
+    const lastNameChanged = normalizeString(existingPerson.lastName) !== normalizeString(lastName);
+
     const hasPhotoUrl =
       member.profilePictureUrl !== null &&
       member.profilePictureUrl !== undefined &&
@@ -168,10 +174,10 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     const genderChanged = member.gender !== null && existingPerson.gender !== member.gender;
 
     const needsUpdate =
-      existingPerson.name !== firstName ||
-      existingPerson.lastName !== lastName ||
-      existingPerson.email !== email ||
-      existingPerson.mobilePhone !== phone ||
+      nameChanged ||
+      lastNameChanged ||
+      emailChanged ||
+      phoneChanged ||
       accessLevelChanged ||
       deptCodeChanged ||
       genderChanged ||
@@ -182,7 +188,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     }
 
     let personPhoto: string | undefined;
-    if (hasPhotoUrl && member.profilePictureUrl) {
+    if (needsPhotoUpdate && member.profilePictureUrl) {
       try {
         personPhoto = await photoCache.getOrFetchBase64(member.turnstileId, member.profilePictureUrl);
       } catch (error) {

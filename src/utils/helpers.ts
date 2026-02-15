@@ -14,6 +14,10 @@ export function normalizeAccessLevel(level: string | null | undefined): string |
   return level === '' || level === null || level === undefined ? null : level;
 }
 
+export function normalizeString(value: string | null | undefined): string {
+  return (value ?? '').trim();
+}
+
 export function accessLevelsEqual(
   a: string | null | undefined,
   b: string | null | undefined
