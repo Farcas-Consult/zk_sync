@@ -9,6 +9,7 @@ import type {
   AccessControlClient,
   AccessControlContext,
   AccessControlPersonSnapshot,
+  EnsureMemberResult,
 } from './accessControl.js';
 
 interface HikResponse<T = unknown> {
@@ -34,7 +35,7 @@ export class HikvisionAccessControlClient implements AccessControlClient {
     member: GymMember,
     _existingSnapshot: AccessControlPersonSnapshot | null,
     context: AccessControlContext
-  ): Promise<void> {
+  ): Promise<EnsureMemberResult> {
     const { firstName, lastName } = parseName(member.fullName);
     const personId = member.turnstileId.toString();
     const personName = [firstName, lastName].filter(Boolean).join(' ') || member.fullName;
@@ -89,6 +90,7 @@ export class HikvisionAccessControlClient implements AccessControlClient {
     }
 
     this.changedPersonIds.add(personId);
+    return 'updated';
   }
 
   async flushChanges(): Promise<void> {

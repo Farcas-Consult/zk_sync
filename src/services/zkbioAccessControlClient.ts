@@ -9,6 +9,7 @@ import type {
   AccessControlClient,
   AccessControlContext,
   AccessControlPersonSnapshot,
+  EnsureMemberResult,
 } from './accessControl.js';
 import type { MemberIssuePayload } from '../utils/issueReporter.js';
 
@@ -39,9 +40,8 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     member: GymMember,
     existingSnapshot: AccessControlPersonSnapshot | null,
     context: AccessControlContext
-  ): Promise<void> {
+  ): Promise<EnsureMemberResult> {
     const { firstName, lastName } = parseName(member.fullName);
-    const personPin = member.turnstileId.toString();
 
     const isFemale = context.isFemale;
     const deptCode =
@@ -53,7 +53,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
       : '';
 
     if (existingSnapshot && existingSnapshot.raw) {
-      await this.updateMemberIfNeeded(
+      return this.updateMemberIfNeeded(
         member,
         existingSnapshot.raw as ZKBioPerson,
         firstName,
@@ -61,15 +61,8 @@ export class ZKBioAccessControlClient implements AccessControlClient {
         accessLevelIds,
         deptCode
       );
-    } else {
-      await this.createMember(member, firstName, lastName, accessLevelIds, deptCode);
     }
-
-    logger.info(
-      `ZKBio ensureMember complete for ${personPin} (${member.fullName}) - access: ${
-        context.shouldHaveAccess ? 'granted' : 'revoked'
-      }`
-    );
+    return this.createMember(member, firstName, lastName, accessLevelIds, deptCode);
   }
 
   async handleMemberError(
@@ -157,7 +150,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     lastName: string,
     accessLevelIds: string,
     deptCode: string
-  ): Promise<void> {
+  ): Promise<EnsureMemberResult> {
     const personPin = member.turnstileId.toString();
     const currentAccessLevel = existingPerson.accLevelIds;
     const accessLevelChanged = !accessLevelsEqual(currentAccessLevel, accessLevelIds);
@@ -185,14 +178,13 @@ export class ZKBioAccessControlClient implements AccessControlClient {
       needsPhotoUpdate;
 
     if (!needsUpdate) {
-      return;
+      return 'skipped';
     }
 
     let personPhoto: string | undefined;
     if (hasPhotoUrl && member.profilePictureUrl) {
       try {
         personPhoto = await photoCache.getOrFetchBase64(member.turnstileId, member.profilePictureUrl);
-        logger.info(`Converted photo URL to base64 for member ${member.turnstileId} (with cache)`);
       } catch (error) {
         const err = error as Error;
         logger.error(`Failed to convert photo URL to base64 for member ${member.turnstileId}`, err);
@@ -210,6 +202,8 @@ export class ZKBioAccessControlClient implements AccessControlClient {
       personPhoto: personPhoto,
       gender: member.gender || undefined,
     });
+    logger.info(`Updated ${personPin} (${member.fullName}) - access: ${accessLevelIds ? 'granted' : 'revoked'}`);
+    return 'updated';
   }
 
   private async createMember(
@@ -218,17 +212,16 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     lastName: string,
     accessLevelIds: string,
     deptCode: string
-  ): Promise<void> {
+  ): Promise<EnsureMemberResult> {
     if (firstName === 'Unknown') {
       logger.warn(`Cannot create ${member.turnstileId} - invalid name`);
-      return;
+      return 'skipped';
     }
 
     let personPhoto: string | undefined;
     if (member.profilePictureUrl && member.profilePictureUrl !== null && member.profilePictureUrl !== '') {
       try {
         personPhoto = await photoCache.getOrFetchBase64(member.turnstileId, member.profilePictureUrl);
-        logger.info(`Converted photo URL to base64 for member ${member.turnstileId} (with cache)`);
       } catch (error) {
         const err = error as Error;
         logger.error(`Failed to convert photo URL to base64 for member ${member.turnstileId}`, err);
@@ -236,8 +229,9 @@ export class ZKBioAccessControlClient implements AccessControlClient {
       }
     }
 
+    const personPin = member.turnstileId.toString();
     const personData = {
-      pin: member.turnstileId.toString(),
+      pin: personPin,
       name: firstName,
       lastName: lastName,
       email: member.email || `turnstile${member.turnstileId}@${config.gym.emailDomain}`,
@@ -252,9 +246,8 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     };
 
     await zkbioClient.createOrEditPerson(personData);
-    logger.info(
-      `Created ${member.turnstileId} (${member.fullName}) - access: ${accessLevelIds ? 'granted' : 'revoked'}`
-    );
+    logger.info(`Created ${personPin} (${member.fullName}) - access: ${accessLevelIds ? 'granted' : 'revoked'}`);
+    return 'created';
   }
 }
 

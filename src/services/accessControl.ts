@@ -16,6 +16,8 @@ export interface AccessControlContext {
   isFemale: boolean;
 }
 
+export type EnsureMemberResult = 'created' | 'updated' | 'skipped';
+
 export interface AccessControlClient {
   readonly vendor: 'zkbio' | 'hikvision';
 
@@ -30,12 +32,13 @@ export interface AccessControlClient {
   /**
    * Ensure a member exists with up-to-date profile and access attributes.
    * Implementations should be idempotent.
+   * Returns the action taken: created, updated, or skipped (no API call).
    */
   ensureMember(
     member: GymMember,
     existingSnapshot: AccessControlPersonSnapshot | null,
     context: AccessControlContext
-  ): Promise<void>;
+  ): Promise<EnsureMemberResult>;
 
   /**
    * Record a per-member issue for this client, if needed.

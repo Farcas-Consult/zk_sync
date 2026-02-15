@@ -6,7 +6,11 @@ import { delay, isWoman } from '../utils/helpers.js';
 import { memberIssuesLogger } from '../utils/memberIssuesLogger.js';
 import { issueReporter, type MemberIssuePayload } from '../utils/issueReporter.js';
 import type { GymMember } from '../types/index.js';
-import type { AccessControlClient, AccessControlPersonSnapshot } from './accessControl.js';
+import type {
+  AccessControlClient,
+  AccessControlPersonSnapshot,
+  EnsureMemberResult,
+} from './accessControl.js';
 import { accessControlClient } from './accessControlFactory.js';
 import { createGymAdapter } from './gymAdapter.js';
 
@@ -143,19 +147,21 @@ export class SyncService {
 
       logger.info(`Processing ${members.length} members with batch data for provider ${this.accessClient.vendor}`);
 
+      const stats = { created: 0, updated: 0, skipped: 0 };
       for (const member of members) {
-        await this.processMember(member, existingSnapshots, addRunIssue);
-        await delay(config.sync.operationDelay);
+        const result = await this.processMember(member, existingSnapshots, addRunIssue);
+        if (result) {
+          stats[result]++;
+          if (result === 'created' || result === 'updated') {
+            await delay(config.sync.operationDelay);
+          }
+        }
       }
 
       const endTime = Date.now();
       const totalTime = ((endTime - startTime) / 1000).toFixed(2);
-      const processingMode = `batch processing with provider ${this.accessClient.vendor} (${Object.keys(
-        existingSnapshots
-      ).length} from batches)`;
-
       logger.info(
-        `Data sync completed in ${totalTime}s - processed ${members.length} members using ${processingMode}`
+        `Sync complete in ${totalTime}s: ${stats.created} created, ${stats.updated} updated, ${stats.skipped} unchanged`
       );
       
       const issueCount = memberIssuesLogger.getIssueCount();
@@ -194,7 +200,7 @@ export class SyncService {
     member: GymMember,
     existingSnapshots: Record<string, AccessControlPersonSnapshot>,
     addRunIssue: (issue: MemberIssuePayload) => void
-  ): Promise<void> {
+  ): Promise<EnsureMemberResult | null> {
     // Skip members with invalid/null names
     if (!member.fullName || typeof member.fullName !== 'string' || member.fullName.trim() === '') {
       logger.warn(`Skipping member ${member.turnstileId} - invalid or missing fullName`);
@@ -212,7 +218,7 @@ export class SyncService {
         errorType: 'invalid_name',
         errorMessage: 'Invalid or missing fullName',
       });
-      return;
+      return null;
     }
 
     const externalId = member.turnstileId.toString();
@@ -227,7 +233,7 @@ export class SyncService {
     };
 
     try {
-      await this.accessClient.ensureMember(member, existingSnapshot, context);
+      return await this.accessClient.ensureMember(member, existingSnapshot, context);
     } catch (error) {
       const clientWithHandler = this.accessClient as AccessControlClient & {
         handleMemberError?: (
@@ -251,6 +257,7 @@ export class SyncService {
           errorMessage: err.message,
         });
       }
+      return null;
     }
   }
 }

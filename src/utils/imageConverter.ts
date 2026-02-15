@@ -1,6 +1,5 @@
 import fetch from 'node-fetch';
 import { httpsAgent } from '../config/index.js';
-import { logger } from './logger.js';
 
 const IMAGE_FETCH_TIMEOUT = 10000; // 10 seconds
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
@@ -48,9 +47,7 @@ export async function urlToBase64(url: string): Promise<string> {
       throw new Error(`Image file too large: ${buffer.length} bytes (max: ${MAX_IMAGE_SIZE} bytes)`);
     }
 
-    const base64 = buffer.toString('base64');
-    logger.info(`Successfully converted image URL to base64 (${buffer.length} bytes)`);
-    return base64;
+    return buffer.toString('base64');
   } catch (error) {
     if (error instanceof Error) {
       if (error.name === 'AbortError') {

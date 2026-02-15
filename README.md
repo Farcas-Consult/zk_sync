@@ -38,6 +38,7 @@ cp .env.example .env
 
    **Optional Variables:**
    - `ZKBIO_DEPT_CODE`: Department code in ZKBio (default: `1`)
+   - `GYM_API_SOURCE`: API source type (`fitness254` or `gymmaster`, default: `fitness254`)
    - `GYM_NAME`: Name of the gym (for notifications, default: `Gym`)
    - `GYM_EMAIL_DOMAIN`: Email domain for generated emails (default: `gym.local`)
    - `TELEGRAM_BOT_TOKEN`: Telegram bot token for notifications
