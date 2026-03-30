@@ -20,6 +20,7 @@ export const config = {
     baseUrl: process.env.HIK_BASE_URL || '',
     appKey: process.env.HIK_APP_KEY || '',
     appSecret: process.env.HIK_APP_SECRET || '',
+    userId: process.env.HIK_USER_ID || '',
     orgIndexCode: process.env.HIK_ORG_INDEX_CODE || '',
     womenOrgIndexCode: process.env.HIK_WOMEN_ORG_INDEX_CODE || '',
     privilegeGroupId: process.env.HIK_PRIVILEGE_GROUP_ID || '',
@@ -80,6 +81,9 @@ export function validateConfig(): void {
     }
     if (!config.hikvision.appSecret) {
       errors.push('HIK_APP_SECRET is required when ACCESS_CONTROL_VENDOR=hikvision');
+    }
+    if (!config.hikvision.userId) {
+      errors.push('HIK_USER_ID is required when ACCESS_CONTROL_VENDOR=hikvision');
     }
     if (!config.hikvision.orgIndexCode) {
       errors.push('HIK_ORG_INDEX_CODE is required when ACCESS_CONTROL_VENDOR=hikvision');

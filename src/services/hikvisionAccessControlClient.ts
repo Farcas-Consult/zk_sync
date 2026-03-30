@@ -83,6 +83,9 @@ export class HikvisionAccessControlClient implements AccessControlClient {
     if (member.phoneNumber) {
       payload['phoneNo'] = member.phoneNumber;
     }
+    if (member.gender) {
+      payload['gender'] = member.gender === 'F' ? 2 : 1;
+    }
     if (faceData) {
       payload['faces'] = [
         {
@@ -128,7 +131,7 @@ export class HikvisionAccessControlClient implements AccessControlClient {
       const addData = await this.request<HikPersonInfo>(
         'POST',
         '/artemis/api/resource/v1/person/single/add',
-        { personInfo }
+        personInfo
       );
       const personId = this.extractPersonId(addData) || (await this.getPersonIdByPersonCode(personCode));
       if (!personId) {
@@ -160,7 +163,7 @@ export class HikvisionAccessControlClient implements AccessControlClient {
         personId: existingPersonId,
       };
 
-      await this.request('POST', '/artemis/api/resource/v1/person/single/update', { personInfo: updatePayload });
+      await this.request('POST', '/artemis/api/resource/v1/person/single/update', updatePayload);
       logger.info(`Hikvision person update succeeded for personCode=${personCode}, personId=${existingPersonId}`);
       return existingPersonId;
     }
@@ -271,15 +274,17 @@ export class HikvisionAccessControlClient implements AccessControlClient {
       Accept: '*/*',
       'Content-Type': 'application/json',
       Date: date,
+      userId: config.hikvision.userId.trim(),
       'X-Ca-Key': appKey,
       'X-Ca-Timestamp': timestamp,
-      'X-Ca-Signature-Headers': 'x-ca-key,x-ca-timestamp',
+      'X-Ca-Signature-Headers': 'userid,x-ca-key,x-ca-timestamp',
     };
     if (contentMd5) {
       headers['Content-MD5'] = contentMd5;
     }
 
     const canonicalHeaders = [
+      `userid:${headers['userId']}`,
       `x-ca-key:${headers['X-Ca-Key']}`,
       `x-ca-timestamp:${headers['X-Ca-Timestamp']}`,
     ].join('\n');
