@@ -121,7 +121,14 @@ export class HikvisionAccessControlClient implements AccessControlClient {
         .join(', ')}${personIds.length > 10 ? '...' : ''}`
     );
 
-    await this.request<void>('POST', '/artemis/api/visitor/v1/auth/reapplication', body);
+    try {
+      await this.request<void>('POST', '/artemis/api/visitor/v1/auth/reapplication', body);
+    } catch (error) {
+      const err = error as Error;
+      logger.warn(
+        `Hikvision auth reapplication failed; continuing without failing sync. Error: ${err.message}`
+      );
+    }
 
     this.changedPersonIds.clear();
   }
@@ -154,7 +161,7 @@ export class HikvisionAccessControlClient implements AccessControlClient {
       const existingPersonId = await this.getPersonIdByPersonCode(personCode);
       if (!existingPersonId) {
         throw new Error(
-          `Hikvision person add failed and person lookup by personCode=${personCode} returned no personId`
+          `Hikvision person add failed and person lookup by personCode=${personCode} returned no exact personId match`
         );
       }
 
@@ -175,13 +182,15 @@ export class HikvisionAccessControlClient implements AccessControlClient {
       '/artemis/api/resource/v1/person/advance/personList',
       {
         pageNo: 1,
-        pageSize: 1,
+        pageSize: 50,
         personCode,
       }
     );
 
     if (!data) return null;
-    const personId = this.extractPersonId(data.list?.[0]);
+    const list = Array.isArray(data.list) ? data.list : [];
+    const exactMatch = list.find((item) => String(item.personCode ?? '') === personCode);
+    const personId = this.extractPersonId(exactMatch);
     return personId || null;
   }
 
