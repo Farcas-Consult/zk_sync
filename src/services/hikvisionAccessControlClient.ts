@@ -18,6 +18,12 @@ interface HikResponse<T = unknown> {
   data?: T;
 }
 
+interface HikPersonInfo {
+  personId?: string;
+  personCode?: string;
+  [key: string]: unknown;
+}
+
 export class HikvisionAccessControlClient implements AccessControlClient {
   readonly vendor = 'hikvision' as const;
 
@@ -36,7 +42,7 @@ export class HikvisionAccessControlClient implements AccessControlClient {
     context: AccessControlContext
   ): Promise<void> {
     const { firstName, lastName } = parseName(member.fullName);
-    const personId = member.turnstileId.toString();
+    const externalPersonCode = member.turnstileId.toString();
     const personName = [firstName, lastName].filter(Boolean).join(' ') || member.fullName;
 
     const orgIndexCode =
@@ -58,7 +64,9 @@ export class HikvisionAccessControlClient implements AccessControlClient {
 
     const payload: Record<string, unknown> = {
       personName,
-      personId,
+      personCode: externalPersonCode,
+      personGivenName: firstName,
+      personFamilyName: lastName || firstName,
       orgIndexCode,
     };
 
@@ -80,7 +88,7 @@ export class HikvisionAccessControlClient implements AccessControlClient {
       ];
     }
 
-    await this.upsertPerson(payload);
+    const personId = await this.upsertPerson(payload, externalPersonCode);
 
     if (context.shouldHaveAccess) {
       await this.grantAccess(personId, context.isFemale);
@@ -112,18 +120,68 @@ export class HikvisionAccessControlClient implements AccessControlClient {
     this.changedPersonIds.clear();
   }
 
-  private async upsertPerson(personInfo: Record<string, unknown>): Promise<void> {
+  private async upsertPerson(personInfo: Record<string, unknown>, personCode: string): Promise<string> {
     try {
-      await this.request('POST', '/artemis/api/resource/v1/person/single/add', { personInfo });
-      logger.info(`Hikvision person add succeeded for ${personInfo.personId as string}`);
+      const addData = await this.request<HikPersonInfo>(
+        'POST',
+        '/artemis/api/resource/v1/person/single/add',
+        { personInfo }
+      );
+      const personId = this.extractPersonId(addData) || (await this.getPersonIdByPersonCode(personCode));
+      if (!personId) {
+        throw new Error(`Unable to resolve personId after add for personCode=${personCode}`);
+      }
+      logger.info(`Hikvision person add succeeded for personCode=${personCode}, personId=${personId}`);
+      return personId;
     } catch (error) {
       const err = error as Error;
       logger.warn(
-        `Hikvision person add failed for ${personInfo.personId as string}, attempting update instead: ${err.message}`
+        `Hikvision person add failed for personCode=${personCode}, attempting update instead: ${err.message}`
       );
-      await this.request('POST', '/artemis/api/resource/v1/person/single/update', { personInfo });
-      logger.info(`Hikvision person update succeeded for ${personInfo.personId as string}`);
+
+      const existingPersonId = await this.getPersonIdByPersonCode(personCode);
+      if (!existingPersonId) {
+        throw new Error(
+          `Hikvision person add failed and person lookup by personCode=${personCode} returned no personId`
+        );
+      }
+
+      const updatePayload = {
+        ...personInfo,
+        personId: existingPersonId,
+      };
+
+      await this.request('POST', '/artemis/api/resource/v1/person/single/update', { personInfo: updatePayload });
+      logger.info(`Hikvision person update succeeded for personCode=${personCode}, personId=${existingPersonId}`);
+      return existingPersonId;
     }
+  }
+
+  private async getPersonIdByPersonCode(personCode: string): Promise<string | null> {
+    const data = await this.request<HikPersonInfo | { personInfo?: HikPersonInfo }>(
+      'POST',
+      '/artemis/api/resource/v1/person/personCode/personInfo',
+      { personCode }
+    );
+
+    if (!data) return null;
+    const personId = this.extractPersonId(data);
+    return personId || null;
+  }
+
+  private extractPersonId(data: unknown): string | undefined {
+    if (!data || typeof data !== 'object') return undefined;
+    const asInfo = data as HikPersonInfo;
+    if (typeof asInfo.personId === 'string' && asInfo.personId) {
+      return asInfo.personId;
+    }
+
+    const nested = (data as { personInfo?: HikPersonInfo }).personInfo;
+    if (nested && typeof nested.personId === 'string' && nested.personId) {
+      return nested.personId;
+    }
+
+    return undefined;
   }
 
   private async grantAccess(personId: string, isFemale: boolean): Promise<void> {
