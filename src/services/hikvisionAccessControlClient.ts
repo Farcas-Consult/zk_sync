@@ -26,18 +26,66 @@ interface HikPersonInfo {
 
 interface HikPersonListData {
   list?: HikPersonInfo[];
+  total?: number;
+  pageNo?: number;
+  pageSize?: number;
 }
 
 export class HikvisionAccessControlClient implements AccessControlClient {
   readonly vendor = 'hikvision' as const;
 
   private changedPersonIds = new Set<string>();
+  private personIdByCode = new Map<string, string>();
 
   async prefetchExistingPersons(
     _externalIds: string[]
   ): Promise<Record<string, AccessControlPersonSnapshot>> {
-    // For now, we rely on upsert semantics per member and do not prefetch in bulk.
-    return {};
+    const snapshots: Record<string, AccessControlPersonSnapshot> = {};
+    this.personIdByCode.clear();
+
+    // Doc: bulk listing uses person/personList (not advance/personList); pageSize max 500; total drives pagination.
+    let pageNo = 1;
+    const pageSize = 500;
+
+    while (true) {
+      const data = await this.request<HikPersonListData>(
+        'POST',
+        '/artemis/api/resource/v1/person/personList',
+        { pageNo, pageSize }
+      );
+
+      const list = Array.isArray(data?.list) ? data.list : [];
+      for (const item of list) {
+        const personCode = this.coercePersonCode(item.personCode);
+        const personId = this.coercePersonId(item.personId);
+        if (!personCode || !personId) continue;
+        this.personIdByCode.set(personCode, personId);
+        snapshots[personCode] = {
+          externalId: personCode,
+          personId,
+          raw: item,
+        };
+      }
+
+      if (list.length === 0) {
+        break;
+      }
+      if (list.length < pageSize) {
+        break;
+      }
+      const total = data?.total;
+      if (typeof total === 'number' && pageNo * pageSize >= total) {
+        break;
+      }
+      pageNo += 1;
+      if (pageNo > 5000) {
+        logger.warn('Hikvision prefetch stopped after 5000 pages (safety cap)');
+        break;
+      }
+    }
+
+    logger.info(`Hikvision prefetch complete: indexed ${this.personIdByCode.size} existing persons`);
+    return snapshots;
   }
 
   async ensureMember(
@@ -134,16 +182,26 @@ export class HikvisionAccessControlClient implements AccessControlClient {
   }
 
   private async upsertPerson(personInfo: Record<string, unknown>, personCode: string): Promise<string> {
+    const existingFromPrefetch = this.personIdByCode.get(personCode);
+    if (existingFromPrefetch) {
+      const updatePayload = { ...personInfo, personId: existingFromPrefetch };
+      await this.request('POST', '/artemis/api/resource/v1/person/single/update', updatePayload);
+      logger.info(`Hikvision person update (prefetch hit) for personCode=${personCode}, personId=${existingFromPrefetch}`);
+      return existingFromPrefetch;
+    }
+
     try {
       const addData = await this.request<HikPersonInfo>(
         'POST',
         '/artemis/api/resource/v1/person/single/add',
         personInfo
       );
-      const personId = this.extractPersonId(addData) || (await this.getPersonIdByPersonCode(personCode));
+      const personId =
+        this.coercePersonId(this.extractPersonId(addData)) || (await this.getPersonIdByPersonCode(personCode));
       if (!personId) {
         throw new Error(`Unable to resolve personId after add for personCode=${personCode}`);
       }
+      this.personIdByCode.set(personCode, personId);
       logger.info(`Hikvision person add succeeded for personCode=${personCode}, personId=${personId}`);
       return personId;
     } catch (error) {
@@ -171,27 +229,46 @@ export class HikvisionAccessControlClient implements AccessControlClient {
       };
 
       await this.request('POST', '/artemis/api/resource/v1/person/single/update', updatePayload);
+      this.personIdByCode.set(personCode, existingPersonId);
       logger.info(`Hikvision person update succeeded for personCode=${personCode}, personId=${existingPersonId}`);
       return existingPersonId;
     }
   }
 
+  /**
+   * Doc: POST person/personCode/personInfo returns data.personId + data.personCode (not a personCode filter on advance/personList).
+   */
   private async getPersonIdByPersonCode(personCode: string): Promise<string | null> {
-    const data = await this.request<HikPersonListData>(
-      'POST',
-      '/artemis/api/resource/v1/person/advance/personList',
-      {
-        pageNo: 1,
-        pageSize: 50,
-        personCode,
-      }
-    );
+    const cached = this.personIdByCode.get(personCode);
+    if (cached) {
+      return cached;
+    }
 
-    if (!data) return null;
-    const list = Array.isArray(data.list) ? data.list : [];
-    const exactMatch = list.find((item) => String(item.personCode ?? '') === personCode);
-    const personId = this.extractPersonId(exactMatch);
-    return personId || null;
+    try {
+      const data = await this.request<HikPersonInfo>(
+        'POST',
+        '/artemis/api/resource/v1/person/personCode/personInfo',
+        { personCode }
+      );
+      const personId = this.coercePersonId(this.extractPersonId(data));
+      if (personId) {
+        this.personIdByCode.set(personCode, personId);
+      }
+      return personId || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private coercePersonCode(value: unknown): string {
+    if (value === null || value === undefined) return '';
+    return String(value).trim();
+  }
+
+  private coercePersonId(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    const s = String(value).trim();
+    return s || null;
   }
 
   private normalizeHumanName(value: string): string {
@@ -210,13 +287,13 @@ export class HikvisionAccessControlClient implements AccessControlClient {
   private extractPersonId(data: unknown): string | undefined {
     if (!data || typeof data !== 'object') return undefined;
     const asInfo = data as HikPersonInfo;
-    if (typeof asInfo.personId === 'string' && asInfo.personId) {
-      return asInfo.personId;
+    if (asInfo.personId !== undefined && asInfo.personId !== null && asInfo.personId !== '') {
+      return String(asInfo.personId);
     }
 
     const nested = (data as { personInfo?: HikPersonInfo }).personInfo;
-    if (nested && typeof nested.personId === 'string' && nested.personId) {
-      return nested.personId;
+    if (nested?.personId !== undefined && nested?.personId !== null && nested?.personId !== '') {
+      return String(nested.personId);
     }
 
     return undefined;
