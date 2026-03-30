@@ -177,19 +177,19 @@ export class HikvisionAccessControlClient implements AccessControlClient {
     const pathWithQuery = `${parsedUrl.pathname}${parsedUrl.search}`;
 
     const timestamp = Date.now().toString();
-    const nonce = crypto.randomUUID();
+    const date = new Date().toUTCString();
     const bodyString = body ? JSON.stringify(body) : '';
     const contentMd5 = bodyString ? crypto.createHash('md5').update(bodyString).digest('base64') : '';
     const appKey = config.hikvision.appKey.trim();
     const appSecret = config.hikvision.appSecret.trim();
 
     const headers: Record<string, string> = {
-      Accept: 'application/json',
+      Accept: '*/*',
       'Content-Type': 'application/json',
+      Date: date,
       'X-Ca-Key': appKey,
       'X-Ca-Timestamp': timestamp,
-      'X-Ca-Nonce': nonce,
-      'X-Ca-Signature-Headers': 'x-ca-key,x-ca-nonce,x-ca-timestamp',
+      'X-Ca-Signature-Headers': 'x-ca-key,x-ca-timestamp',
     };
     if (contentMd5) {
       headers['Content-MD5'] = contentMd5;
@@ -197,7 +197,6 @@ export class HikvisionAccessControlClient implements AccessControlClient {
 
     const canonicalHeaders = [
       `x-ca-key:${headers['X-Ca-Key']}`,
-      `x-ca-nonce:${headers['X-Ca-Nonce']}`,
       `x-ca-timestamp:${headers['X-Ca-Timestamp']}`,
     ].join('\n');
 
@@ -206,7 +205,7 @@ export class HikvisionAccessControlClient implements AccessControlClient {
       headers.Accept,
       headers['Content-MD5'] || '',
       headers['Content-Type'],
-      '',
+      headers.Date || '',
       canonicalHeaders,
       pathWithQuery,
     ].join('\n');
@@ -238,6 +237,11 @@ export class HikvisionAccessControlClient implements AccessControlClient {
 
     if (json.code !== undefined && json.code !== 0 && json.code !== '0') {
       const msg = json.msg || json.message || 'Unknown error';
+      if (String(json.code) === '68') {
+        logger.error(
+          `Hikvision signature diagnostic: path=${pathWithQuery}, ts=${timestamp}, signedHeaders=${headers['X-Ca-Signature-Headers']}, hasMd5=${!!contentMd5}, date=${date}`
+        );
+      }
       throw new Error(`Hikvision API error: ${msg} (code: ${json.code})`);
     }
 
