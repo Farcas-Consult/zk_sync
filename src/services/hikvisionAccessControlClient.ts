@@ -173,32 +173,46 @@ export class HikvisionAccessControlClient implements AccessControlClient {
   ): Promise<T> {
     const baseUrl = config.hikvision.baseUrl.replace(/\/+$/, '');
     const url = `${baseUrl}${path}`;
+    const parsedUrl = new URL(url);
+    const pathWithQuery = `${parsedUrl.pathname}${parsedUrl.search}`;
 
     const timestamp = Date.now().toString();
+    const nonce = crypto.randomUUID();
     const bodyString = body ? JSON.stringify(body) : '';
     const contentMd5 = bodyString ? crypto.createHash('md5').update(bodyString).digest('base64') : '';
+    const appKey = config.hikvision.appKey.trim();
+    const appSecret = config.hikvision.appSecret.trim();
 
     const headers: Record<string, string> = {
       Accept: 'application/json',
       'Content-Type': 'application/json',
-      'X-Ca-Key': config.hikvision.appKey,
+      'X-Ca-Key': appKey,
       'X-Ca-Timestamp': timestamp,
-      'X-Ca-Signature-Headers': 'x-ca-key,x-ca-timestamp',
+      'X-Ca-Nonce': nonce,
+      'X-Ca-Signature-Headers': 'x-ca-key,x-ca-nonce,x-ca-timestamp',
     };
+    if (contentMd5) {
+      headers['Content-MD5'] = contentMd5;
+    }
+
+    const canonicalHeaders = [
+      `x-ca-key:${headers['X-Ca-Key']}`,
+      `x-ca-nonce:${headers['X-Ca-Nonce']}`,
+      `x-ca-timestamp:${headers['X-Ca-Timestamp']}`,
+    ].join('\n');
 
     const stringToSign = [
       method,
       headers.Accept,
-      contentMd5,
+      headers['Content-MD5'] || '',
       headers['Content-Type'],
       '',
-      `x-ca-key:${headers['X-Ca-Key']}`,
-      `x-ca-timestamp:${headers['X-Ca-Timestamp']}`,
-      path,
+      canonicalHeaders,
+      pathWithQuery,
     ].join('\n');
 
     const signature = crypto
-      .createHmac('sha256', config.hikvision.appSecret)
+      .createHmac('sha256', appSecret)
       .update(stringToSign, 'utf8')
       .digest('base64');
 
