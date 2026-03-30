@@ -25,6 +25,11 @@ export const config = {
     womenOrgIndexCode: process.env.HIK_WOMEN_ORG_INDEX_CODE || '',
     privilegeGroupId: process.env.HIK_PRIVILEGE_GROUP_ID || '',
     womenPrivilegeGroupId: process.env.HIK_WOMEN_PRIVILEGE_GROUP_ID || '',
+    privilegeBatchSize: Math.max(
+      1,
+      parseInt(process.env.HIK_PRIVILEGE_BATCH_SIZE || '200', 10)
+    ),
+    skipReapplication: process.env.HIK_SKIP_REAPPLICATION === 'true',
   },
   gym: {
     apiUrl: process.env.GMS_API_URL || '',

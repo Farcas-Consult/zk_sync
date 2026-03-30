@@ -11,6 +11,9 @@ import type {
   AccessControlPersonSnapshot,
 } from './accessControl.js';
 
+const HIK_STRING = (v: unknown): string =>
+  v === undefined || v === null ? '' : String(v).trim();
+
 interface HikResponse<T = unknown> {
   code?: number | string;
   msg?: string;
@@ -36,11 +39,19 @@ export class HikvisionAccessControlClient implements AccessControlClient {
 
   private changedPersonIds = new Set<string>();
   private personIdByCode = new Map<string, string>();
+  /** privilegeGroupId → personIds pending addPersons */
+  private privilegeAddQueue = new Map<string, Set<string>>();
+  /** privilegeGroupId → personIds pending deletePersons */
+  private privilegeDeleteQueue = new Map<string, Set<string>>();
+  private skippedProfileUpdates = 0;
 
   async prefetchExistingPersons(
     _externalIds: string[]
   ): Promise<Record<string, AccessControlPersonSnapshot>> {
     const snapshots: Record<string, AccessControlPersonSnapshot> = {};
+    this.privilegeAddQueue.clear();
+    this.privilegeDeleteQueue.clear();
+    this.skippedProfileUpdates = 0;
     this.personIdByCode.clear();
 
     // Doc: bulk listing uses person/personList (not advance/personList); pageSize max 500; total drives pagination.
@@ -90,7 +101,7 @@ export class HikvisionAccessControlClient implements AccessControlClient {
 
   async ensureMember(
     member: GymMember,
-    _existingSnapshot: AccessControlPersonSnapshot | null,
+    existingSnapshot: AccessControlPersonSnapshot | null,
     context: AccessControlContext
   ): Promise<void> {
     const { firstName, lastName } = parseName(member.fullName);
@@ -142,19 +153,33 @@ export class HikvisionAccessControlClient implements AccessControlClient {
       ];
     }
 
-    const personId = await this.upsertPerson(payload, externalPersonCode);
+    const personId = await this.upsertPerson(payload, externalPersonCode, existingSnapshot);
 
     if (context.shouldHaveAccess) {
-      await this.grantAccess(personId, context.isFemale);
+      this.queueGrant(personId, context.isFemale);
     } else {
-      await this.revokeAccess(personId, context.isFemale);
+      this.queueRevoke(personId, context.isFemale);
     }
 
     this.changedPersonIds.add(personId);
   }
 
   async flushChanges(): Promise<void> {
+    await this.flushPrivilegeQueues();
+
+    if (this.skippedProfileUpdates > 0) {
+      logger.info(
+        `Hikvision skipped ${this.skippedProfileUpdates} redundant profile update(s) (unchanged fields, no new face)`
+      );
+    }
+
     if (this.changedPersonIds.size === 0) {
+      return;
+    }
+
+    if (config.hikvision.skipReapplication) {
+      logger.info('Hikvision auth reapplication skipped (HIK_SKIP_REAPPLICATION=true)');
+      this.changedPersonIds.clear();
       return;
     }
 
@@ -181,9 +206,20 @@ export class HikvisionAccessControlClient implements AccessControlClient {
     this.changedPersonIds.clear();
   }
 
-  private async upsertPerson(personInfo: Record<string, unknown>, personCode: string): Promise<string> {
+  private async upsertPerson(
+    personInfo: Record<string, unknown>,
+    personCode: string,
+    existingSnapshot: AccessControlPersonSnapshot | null
+  ): Promise<string> {
     const existingFromPrefetch = this.personIdByCode.get(personCode);
+    const hasFace =
+      Array.isArray(personInfo['faces']) && (personInfo['faces'] as unknown[]).length > 0;
+
     if (existingFromPrefetch) {
+      if (!hasFace && this.hikPersonUnchanged(existingSnapshot?.raw, personInfo)) {
+        this.skippedProfileUpdates += 1;
+        return existingFromPrefetch;
+      }
       const updatePayload = { ...personInfo, personId: existingFromPrefetch };
       await this.request('POST', '/artemis/api/resource/v1/person/single/update', updatePayload);
       logger.info(`Hikvision person update (prefetch hit) for personCode=${personCode}, personId=${existingFromPrefetch}`);
@@ -197,7 +233,8 @@ export class HikvisionAccessControlClient implements AccessControlClient {
         personInfo
       );
       const personId =
-        this.coercePersonId(this.extractPersonId(addData)) || (await this.getPersonIdByPersonCode(personCode));
+        this.coercePersonId(this.extractPersonId(addData)) ||
+        (await this.getPersonIdByPersonCode(personCode));
       if (!personId) {
         throw new Error(`Unable to resolve personId after add for personCode=${personCode}`);
       }
@@ -299,44 +336,129 @@ export class HikvisionAccessControlClient implements AccessControlClient {
     return undefined;
   }
 
-  private async grantAccess(personId: string, isFemale: boolean): Promise<void> {
+  private resolvePrivilegeGroupId(isFemale: boolean): string | null {
     const privilegeGroupId =
       isFemale && config.hikvision.womenPrivilegeGroupId
         ? config.hikvision.womenPrivilegeGroupId
         : config.hikvision.privilegeGroupId;
+    return privilegeGroupId?.trim() ? privilegeGroupId.trim() : null;
+  }
 
+  private queueGrant(personId: string, isFemale: boolean): void {
+    const privilegeGroupId = this.resolvePrivilegeGroupId(isFemale);
     if (!privilegeGroupId) {
       logger.warn(`No Hikvision privilege group configured; skipping grant for personId=${personId}`);
       return;
     }
-
-    const body = {
-      privilegeGroupId,
-      list: [{ id: personId }],
-      type: 1,
-    };
-
-    await this.request('POST', '/artemis/api/acs/v1/privilege/group/single/addPersons', body);
+    this.enqueuePrivilege(this.privilegeAddQueue, privilegeGroupId, personId);
+    this.dequeuePrivilege(this.privilegeDeleteQueue, privilegeGroupId, personId);
   }
 
-  private async revokeAccess(personId: string, isFemale: boolean): Promise<void> {
-    const privilegeGroupId =
-      isFemale && config.hikvision.womenPrivilegeGroupId
-        ? config.hikvision.womenPrivilegeGroupId
-        : config.hikvision.privilegeGroupId;
-
+  private queueRevoke(personId: string, isFemale: boolean): void {
+    const privilegeGroupId = this.resolvePrivilegeGroupId(isFemale);
     if (!privilegeGroupId) {
       logger.warn(`No Hikvision privilege group configured; skipping revoke for personId=${personId}`);
       return;
     }
+    this.enqueuePrivilege(this.privilegeDeleteQueue, privilegeGroupId, personId);
+    this.dequeuePrivilege(this.privilegeAddQueue, privilegeGroupId, personId);
+  }
 
-    const body = {
-      privilegeGroupId,
-      list: [{ id: personId }],
-      type: 1,
-    };
+  private enqueuePrivilege(map: Map<string, Set<string>>, groupId: string, personId: string): void {
+    let set = map.get(groupId);
+    if (!set) {
+      set = new Set();
+      map.set(groupId, set);
+    }
+    set.add(personId);
+  }
 
-    await this.request('POST', '/artemis/api/acs/v1/privilege/group/single/deletePersons', body);
+  private dequeuePrivilege(map: Map<string, Set<string>>, groupId: string, personId: string): void {
+    const set = map.get(groupId);
+    if (set) {
+      set.delete(personId);
+      if (set.size === 0) {
+        map.delete(groupId);
+      }
+    }
+  }
+
+  /**
+   * Batches addPersons/deletePersons per privilege group (doc: list accepts multiple ids).
+   */
+  private async flushPrivilegeQueues(): Promise<void> {
+    const batchSize = config.hikvision.privilegeBatchSize;
+    let addRequests = 0;
+    let deleteRequests = 0;
+    let addPeople = 0;
+    let deletePeople = 0;
+
+    for (const [privilegeGroupId, ids] of this.privilegeAddQueue) {
+      const list = Array.from(ids);
+      addPeople += list.length;
+      for (let i = 0; i < list.length; i += batchSize) {
+        const chunk = list.slice(i, i + batchSize);
+        await this.request('POST', '/artemis/api/acs/v1/privilege/group/single/addPersons', {
+          privilegeGroupId,
+          list: chunk.map((id) => ({ id })),
+          type: 1,
+        });
+        addRequests += 1;
+      }
+    }
+
+    for (const [privilegeGroupId, ids] of this.privilegeDeleteQueue) {
+      const list = Array.from(ids);
+      deletePeople += list.length;
+      for (let i = 0; i < list.length; i += batchSize) {
+        const chunk = list.slice(i, i + batchSize);
+        await this.request('POST', '/artemis/api/acs/v1/privilege/group/single/deletePersons', {
+          privilegeGroupId,
+          list: chunk.map((id) => ({ id })),
+          type: 1,
+        });
+        deleteRequests += 1;
+      }
+    }
+
+    this.privilegeAddQueue.clear();
+    this.privilegeDeleteQueue.clear();
+
+    if (addRequests > 0 || deleteRequests > 0) {
+      logger.info(
+        `Hikvision privilege flush: ${addPeople} grant(s) in ${addRequests} request(s), ${deletePeople} revoke(s) in ${deleteRequests} request(s) (batch size ${batchSize})`
+      );
+    }
+  }
+
+  /** True if Hik list/detail raw matches the payload we would send (no face refresh this run). */
+  private hikPersonUnchanged(raw: unknown, payload: Record<string, unknown>): boolean {
+    if (!raw || typeof raw !== 'object') {
+      return false;
+    }
+    const r = raw as Record<string, unknown>;
+    if (HIK_STRING(r.personName) !== HIK_STRING(payload.personName)) {
+      return false;
+    }
+    if (HIK_STRING(r.personGivenName) !== HIK_STRING(payload.personGivenName)) {
+      return false;
+    }
+    if (HIK_STRING(r.personFamilyName) !== HIK_STRING(payload.personFamilyName)) {
+      return false;
+    }
+    if (HIK_STRING(r.orgIndexCode) !== HIK_STRING(payload.orgIndexCode)) {
+      return false;
+    }
+    if (HIK_STRING(r.email) !== HIK_STRING(payload.email)) {
+      return false;
+    }
+    if (HIK_STRING(r.phoneNo) !== HIK_STRING(payload.phoneNo)) {
+      return false;
+    }
+    if (payload['gender'] !== undefined && Number(r.gender) !== Number(payload['gender'])) {
+      return false;
+    }
+    return true;
   }
 
   private async request<T>(
