@@ -24,6 +24,10 @@ interface HikPersonInfo {
   [key: string]: unknown;
 }
 
+interface HikPersonListData {
+  list?: HikPersonInfo[];
+}
+
 export class HikvisionAccessControlClient implements AccessControlClient {
   readonly vendor = 'hikvision' as const;
 
@@ -43,7 +47,9 @@ export class HikvisionAccessControlClient implements AccessControlClient {
   ): Promise<void> {
     const { firstName, lastName } = parseName(member.fullName);
     const externalPersonCode = member.turnstileId.toString();
-    const personName = [firstName, lastName].filter(Boolean).join(' ') || member.fullName;
+    const personName = this.normalizeHumanName([firstName, lastName].filter(Boolean).join(' ') || member.fullName);
+    const safeGivenName = this.normalizeHumanName(firstName || 'Member');
+    const safeFamilyName = this.normalizeHumanName(lastName || 'Member');
 
     const orgIndexCode =
       context.isFemale && config.hikvision.womenOrgIndexCode
@@ -65,15 +71,12 @@ export class HikvisionAccessControlClient implements AccessControlClient {
     const payload: Record<string, unknown> = {
       personName,
       personCode: externalPersonCode,
-      personGivenName: firstName,
-      personFamilyName: lastName || firstName,
+      personGivenName: safeGivenName,
+      personFamilyName: safeFamilyName,
       orgIndexCode,
     };
 
-    if (member.gender) {
-      // Map 'M' | 'F' to Hikvision gender representation if needed; here we pass through as-is.
-      payload['gender'] = member.gender;
-    }
+    // Intentionally omit gender for now since enum/format differs by deployment.
     if (member.email) {
       payload['email'] = member.email;
     }
@@ -135,9 +138,15 @@ export class HikvisionAccessControlClient implements AccessControlClient {
       return personId;
     } catch (error) {
       const err = error as Error;
+      const errorCode = this.extractErrorCode(err.message);
       logger.warn(
         `Hikvision person add failed for personCode=${personCode}, attempting update instead: ${err.message}`
       );
+
+      // If add fails for non-existence reasons (e.g. validation), do not attempt update lookup.
+      if (errorCode === '2') {
+        throw err;
+      }
 
       const existingPersonId = await this.getPersonIdByPersonCode(personCode);
       if (!existingPersonId) {
@@ -158,15 +167,32 @@ export class HikvisionAccessControlClient implements AccessControlClient {
   }
 
   private async getPersonIdByPersonCode(personCode: string): Promise<string | null> {
-    const data = await this.request<HikPersonInfo | { personInfo?: HikPersonInfo }>(
+    const data = await this.request<HikPersonListData>(
       'POST',
-      '/artemis/api/resource/v1/person/personCode/personInfo',
-      { personCode }
+      '/artemis/api/resource/v1/person/advance/personList',
+      {
+        pageNo: 1,
+        pageSize: 1,
+        personCode,
+      }
     );
 
     if (!data) return null;
-    const personId = this.extractPersonId(data);
+    const personId = this.extractPersonId(data.list?.[0]);
     return personId || null;
+  }
+
+  private normalizeHumanName(value: string): string {
+    const normalized = value
+      .replace(/[^A-Za-z0-9 ]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return normalized || 'Member';
+  }
+
+  private extractErrorCode(message: string): string | null {
+    const match = message.match(/\(code:\s*([^)]+)\)/i);
+    return match?.[1]?.trim() ?? null;
   }
 
   private extractPersonId(data: unknown): string | undefined {
