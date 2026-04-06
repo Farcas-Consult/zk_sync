@@ -37,6 +37,8 @@ export const config = {
     apiSource: (process.env.GYM_API_SOURCE || 'fitness254') as GymApiSource,
     name: process.env.GYM_NAME || 'Gym',
     emailDomain: process.env.GYM_EMAIL_DOMAIN || 'gym.local',
+    pageSize: Math.max(1, parseInt(process.env.GYM_PAGE_SIZE || '1000', 10)),
+    pageDelayMs: Math.max(0, parseInt(process.env.GYM_PAGE_DELAY_MS || '0', 10)),
   },
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',

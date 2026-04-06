@@ -5,10 +5,12 @@ import { telegramService } from './telegram.js';
 import { delay, isWoman } from '../utils/helpers.js';
 import { memberIssuesLogger } from '../utils/memberIssuesLogger.js';
 import { issueReporter, type MemberIssuePayload } from '../utils/issueReporter.js';
-import type { GymMember } from '../types/index.js';
+import type { GymApiResponse, GymMember } from '../types/index.js';
 import type { AccessControlClient, AccessControlPersonSnapshot } from './accessControl.js';
 import { accessControlClient } from './accessControlFactory.js';
 import { createGymAdapter } from './gymAdapter.js';
+
+const FITNESS254_MAX_PAGES = 5000;
 
 export class SyncService {
   constructor(private readonly accessClient: AccessControlClient) {}
@@ -21,10 +23,77 @@ export class SyncService {
       headers['x-api-key'] = config.gym.apiKey;
     }
 
-    const response = await fetch(config.gym.apiUrl, {
+    if (config.gym.apiSource === 'fitness254') {
+      const members = await this.fetchGymMembersFitness254Paginated(headers);
+      await this.notifyGymRecoveryIfNeeded(members.length);
+      return members;
+    }
+
+    const apiResponse = await this.gymGetJson(config.gym.apiUrl, headers);
+    const members = await this.validateAndTransformGymResponse(apiResponse, config.gym.apiUrl);
+    logger.info(`Found ${members.length} members in gym system (source: ${config.gym.apiSource})`);
+
+    await this.notifyGymRecoveryIfNeeded(members.length);
+    return members;
+  }
+
+  private async fetchGymMembersFitness254Paginated(headers: Record<string, string>): Promise<GymMember[]> {
+    let pageUrl: URL;
+    try {
+      pageUrl = new URL(config.gym.apiUrl);
+    } catch {
+      throw new Error(`GMS_API_URL is not a valid URL: ${config.gym.apiUrl}`);
+    }
+
+    const pageSize = config.gym.pageSize;
+    let offset = Math.max(0, parseInt(pageUrl.searchParams.get('offset') || '0', 10) || 0);
+    const allMembers: GymMember[] = [];
+    let pageIndex = 0;
+
+    while (pageIndex < FITNESS254_MAX_PAGES) {
+      pageUrl.searchParams.set('offset', String(offset));
+      pageUrl.searchParams.set('limit', String(pageSize));
+
+      const urlString = pageUrl.toString();
+      const apiResponse = (await this.gymGetJson(urlString, headers)) as GymApiResponse;
+      const pageMembers = await this.validateAndTransformGymResponse(apiResponse, urlString);
+
+      allMembers.push(...pageMembers);
+      pageIndex += 1;
+      logger.info(
+        `Fitness254 page ${pageIndex}: +${pageMembers.length} members (total so far: ${allMembers.length})`
+      );
+
+      if (pageMembers.length === 0) {
+        break;
+      }
+      if (pageMembers.length < pageSize) {
+        break;
+      }
+      if (apiResponse.hasMore === false) {
+        break;
+      }
+
+      offset += pageMembers.length;
+
+      if (pageIndex < FITNESS254_MAX_PAGES && config.gym.pageDelayMs > 0) {
+        await delay(config.gym.pageDelayMs);
+      }
+    }
+
+    if (pageIndex >= FITNESS254_MAX_PAGES) {
+      logger.warn(`Fitness254 member fetch stopped after ${FITNESS254_MAX_PAGES} pages (safety cap)`);
+    }
+
+    logger.info(`Found ${allMembers.length} members in gym system (source: fitness254)`);
+    return allMembers;
+  }
+
+  private async gymGetJson(url: string, headers: Record<string, string>): Promise<unknown> {
+    const response = await fetch(url, {
       method: 'GET',
       headers,
-      agent: config.gym.apiUrl.startsWith('https:') ? httpsAgent : undefined,
+      agent: url.startsWith('https:') ? httpsAgent : undefined,
     });
 
     if (!response.ok) {
@@ -36,7 +105,7 @@ export class SyncService {
           'auth_error',
           `<b>Authentication Error</b>\n\n` +
             `<b>Status:</b> ${response.status} ${response.statusText}\n` +
-            `<b>URL:</b> ${config.gym.apiUrl}\n` +
+            `<b>URL:</b> ${url}\n` +
             `<b>Failures:</b> ${telegramService.getAuthFailures()}\n\n` +
             `Please check API credentials and server status.`,
           'auth_failure'
@@ -46,7 +115,13 @@ export class SyncService {
       throw new Error(errorMsg);
     }
 
-    const apiResponse = await response.json();
+    return response.json();
+  }
+
+  private async validateAndTransformGymResponse(
+    apiResponse: unknown,
+    requestUrl: string
+  ): Promise<GymMember[]> {
     const adapter = createGymAdapter(config.gym.apiSource);
 
     if (!adapter.validateResponse(apiResponse)) {
@@ -59,7 +134,7 @@ export class SyncService {
         `<b>API Response Error</b>\n\n` +
           `<b>Issue:</b> Invalid response format\n` +
           `<b>Source:</b> ${config.gym.apiSource}\n` +
-          `<b>URL:</b> ${config.gym.apiUrl}\n\n` +
+          `<b>URL:</b> ${requestUrl}\n\n` +
           `API returned unexpected data structure.`,
         'invalid_response'
       );
@@ -67,21 +142,20 @@ export class SyncService {
       throw new Error(msg);
     }
 
-    const members = adapter.transform(apiResponse);
-    logger.info(`Found ${members.length} members in gym system (source: ${config.gym.apiSource})`);
+    return adapter.transform(apiResponse);
+  }
 
+  private async notifyGymRecoveryIfNeeded(memberCount: number): Promise<void> {
     if (telegramService.getAuthFailures() > 0) {
       telegramService.resetAuthFailures();
       await telegramService.notify(
         'recovery',
         `<b>Connection Restored</b>\n\n` +
           `<b>Service:</b> Gym API\n` +
-          `<b>Members Found:</b> ${members.length}\n\n` +
+          `<b>Members Found:</b> ${memberCount}\n\n` +
           `System is back online and functioning normally.`
       );
     }
-
-    return members;
   }
 
   async sync(): Promise<void> {

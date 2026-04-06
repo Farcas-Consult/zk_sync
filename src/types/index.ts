@@ -63,6 +63,8 @@ export interface GymMember {
 export interface GymApiResponse {
   success: boolean;
   data: GymMember[];
+  /** When false, no further pages */
+  hasMore?: boolean;
 }
 
 export interface GymMasterMember {
