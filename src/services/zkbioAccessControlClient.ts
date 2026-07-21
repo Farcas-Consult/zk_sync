@@ -39,7 +39,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     member: GymMember,
     existingSnapshot: AccessControlPersonSnapshot | null,
     context: AccessControlContext
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { firstName, lastName } = parseName(member.fullName);
     const personPin = member.turnstileId.toString();
 
@@ -52,24 +52,25 @@ export class ZKBioAccessControlClient implements AccessControlClient {
         : config.zkbio.gymAccessLevelId
       : '';
 
-    if (existingSnapshot && existingSnapshot.raw) {
-      await this.updateMemberIfNeeded(
+    const changed = existingSnapshot && existingSnapshot.raw
+      ? await this.updateMemberIfNeeded(
         member,
         existingSnapshot.raw as ZKBioPerson,
         firstName,
         lastName,
         accessLevelIds,
         deptCode
-      );
-    } else {
-      await this.createMember(member, firstName, lastName, accessLevelIds, deptCode);
-    }
+      )
+      : await this.createMember(member, firstName, lastName, accessLevelIds, deptCode);
 
-    logger.info(
-      `ZKBio ensureMember complete for ${personPin} (${member.fullName}) - access: ${
+    if (changed) {
+      logger.info(
+        `ZKBio member updated for ${personPin} (${member.fullName}) - access: ${
         context.shouldHaveAccess ? 'granted' : 'revoked'
-      }`
-    );
+        }`
+      );
+    }
+    return changed;
   }
 
   async handleMemberError(
@@ -157,7 +158,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     lastName: string,
     accessLevelIds: string,
     deptCode: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     const personPin = member.turnstileId.toString();
     const currentAccessLevel = existingPerson.accLevelIds;
     const accessLevelChanged = !accessLevelsEqual(currentAccessLevel, accessLevelIds);
@@ -185,7 +186,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
       needsPhotoUpdate;
 
     if (!needsUpdate) {
-      return;
+      return false;
     }
 
     let personPhoto: string | undefined;
@@ -210,6 +211,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
       personPhoto: personPhoto,
       gender: member.gender || undefined,
     }, existingPerson);
+    return true;
   }
 
   private async createMember(
@@ -218,10 +220,10 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     lastName: string,
     accessLevelIds: string,
     deptCode: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (firstName === 'Unknown') {
       logger.warn(`Cannot create ${member.turnstileId} - invalid name`);
-      return;
+      return false;
     }
 
     let personPhoto: string | undefined;
@@ -255,6 +257,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     logger.info(
       `Created ${member.turnstileId} (${member.fullName}) - access: ${accessLevelIds ? 'granted' : 'revoked'}`
     );
+    return true;
   }
 }
 

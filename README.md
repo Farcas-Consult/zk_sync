@@ -49,7 +49,7 @@ cp .env.example .env
    - `SYNC_INTERVAL_MS`: reconciliation interval (default: `3600000` = 1 hour)
    - `SYNC_BATCH_SIZE`: Number of persons per batch (default: `300`)
    - `SYNC_BATCH_DELAY_MS`: Delay between batches in ms (default: `100`)
-   - `SYNC_OPERATION_DELAY_MS`: Delay between operations in ms (default: `100`)
+   - `SYNC_OPERATION_DELAY_MS`: Delay after real provider creates/updates in ms (default: `100`); unchanged members are not delayed.
    - `HEARTBEAT_SCHEDULE`: Cron schedule for heartbeat (default: `30 20 * * *` = 20:30 daily)
    - `HEARTBEAT_TIMEZONE`: Timezone for heartbeat schedule (default: `Africa/Nairobi`)
 

@@ -41,7 +41,7 @@ export interface AccessControlClient {
     member: GymMember,
     existingSnapshot: AccessControlPersonSnapshot | null,
     context: AccessControlContext
-  ): Promise<void>;
+  ): Promise<boolean>;
 
   /**
    * Record a per-member issue for this client, if needed.

@@ -240,8 +240,12 @@ export class SyncService {
       logger.info(`Processing ${members.length} members with batch data for provider ${this.accessClient.vendor}`);
 
       for (const member of members) {
-        await this.processMember(member, existingSnapshots, addRunIssue);
-        await delay(config.sync.operationDelay);
+        const changed = await this.processMember(member, existingSnapshots, addRunIssue);
+        // Do not make an unchanged in-memory comparison wait. The configured delay protects
+        // ZKBio/Hikvision only when an actual provider mutation was made.
+        if (changed && config.sync.operationDelay > 0) {
+          await delay(config.sync.operationDelay);
+        }
       }
 
       const endTime = Date.now();
@@ -341,7 +345,7 @@ export class SyncService {
     member: GymMember,
     existingSnapshots: Record<string, AccessControlPersonSnapshot>,
     addRunIssue: (issue: MemberIssuePayload) => void
-  ): Promise<void> {
+  ): Promise<boolean> {
     // Skip members with invalid/null names
     if (!member.fullName || typeof member.fullName !== 'string' || member.fullName.trim() === '') {
       logger.warn(`Skipping member ${member.turnstileId} - invalid or missing fullName`);
@@ -359,7 +363,7 @@ export class SyncService {
         errorType: 'invalid_name',
         errorMessage: 'Invalid or missing fullName',
       });
-      return;
+      return false;
     }
 
     const externalId = member.turnstileId.toString();
@@ -374,7 +378,7 @@ export class SyncService {
     };
 
     try {
-      await this.accessClient.ensureMember(member, existingSnapshot, context);
+      return await this.accessClient.ensureMember(member, existingSnapshot, context);
     } catch (error) {
       const clientWithHandler = this.accessClient as AccessControlClient & {
         handleMemberError?: (
@@ -398,6 +402,7 @@ export class SyncService {
           errorMessage: err.message,
         });
       }
+      return false;
     }
   }
 }

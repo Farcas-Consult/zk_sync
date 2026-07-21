@@ -49,7 +49,7 @@ export const config = {
     interval: Math.max(60_000, parseInt(process.env.SYNC_INTERVAL_MS || '3600000', 10)),
     batchSize: parseInt(process.env.SYNC_BATCH_SIZE || '300', 10),
     batchDelay: parseInt(process.env.SYNC_BATCH_DELAY_MS || '100', 10), // ms between batches
-    operationDelay: parseInt(process.env.SYNC_OPERATION_DELAY_MS || '100', 10), // ms between operations
+    operationDelay: parseInt(process.env.SYNC_OPERATION_DELAY_MS || '100', 10), // ms between provider mutations
   },
   webhook: {
     enabled: process.env.FITNESS254_WEBHOOK_ENABLED !== 'false',

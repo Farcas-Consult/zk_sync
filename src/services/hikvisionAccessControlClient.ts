@@ -115,7 +115,7 @@ export class HikvisionAccessControlClient implements AccessControlClient {
     member: GymMember,
     existingSnapshot: AccessControlPersonSnapshot | null,
     context: AccessControlContext
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { firstName, lastName } = parseName(member.fullName);
     const externalPersonCode = member.turnstileId.toString();
     const personName = this.normalizeHumanName([firstName, lastName].filter(Boolean).join(' ') || member.fullName);
@@ -174,6 +174,7 @@ export class HikvisionAccessControlClient implements AccessControlClient {
     }
 
     this.changedPersonIds.add(personId);
+    return true;
   }
 
   async flushChanges(): Promise<void> {
