@@ -5,7 +5,8 @@ A TypeScript-based synchronization service that integrates gym management system
 ## Features
 
 - **Batch Processing**: Efficiently syncs large numbers of members using batch operations
-- **Real-time Sync**: Periodic synchronization every 90 seconds
+- **Webhook-first sync**: Fitness254 member events update only the affected member
+- **Reconciliation sync**: An hourly full sync catches missed events and manual changes
 - **Telegram Notifications**: Optional Telegram bot integration for alerts and heartbeats
 - **Error Handling**: Comprehensive error handling with graceful degradation
 - **Type Safety**: Full TypeScript implementation with strict type checking
@@ -42,7 +43,10 @@ cp .env.example .env
    - `GYM_EMAIL_DOMAIN`: Email domain for generated emails (default: `gym.local`)
    - `TELEGRAM_BOT_TOKEN`: Telegram bot token for notifications
    - `TELEGRAM_CHAT_ID`: Telegram chat ID for notifications
-   - `SYNC_INTERVAL_MS`: Sync interval in milliseconds (default: `90000` = 1.5 minutes)
+   - `WEBHOOK_PORT`: local listener port (default: `4000`)
+   - `FITNESS254_WEBHOOK_PATH`: listener path (default: `/fitness254/webhook`)
+   - `FITNESS254_WEBHOOK_SECRET`: required signing secret; HMAC-SHA256 is verified from `x-fitness254-signature`
+   - `SYNC_INTERVAL_MS`: reconciliation interval (default: `3600000` = 1 hour)
    - `SYNC_BATCH_SIZE`: Number of persons per batch (default: `300`)
    - `SYNC_BATCH_DELAY_MS`: Delay between batches in ms (default: `100`)
    - `SYNC_OPERATION_DELAY_MS`: Delay between operations in ms (default: `100`)
@@ -69,6 +73,10 @@ Run the compiled code:
 ```bash
 pnpm start
 ```
+
+### Fitness254 webhooks
+
+Expose `http(s)://<host>:4000/fitness254/webhook` (or your configured port and path), then register it as the Fitness254 workflow destination for `member.*` events and `webhook.test`. The service verifies the HMAC-SHA256 signature from `x-fitness254-signature` against the exact raw body, serializes the update with reconciliation work, and returns success only after processing. `GET /health` returns `{ "ok": true }` for tunnel monitoring.
 
 ## Project Structure
 
@@ -98,7 +106,7 @@ The service can be configured via environment variables. See `.env.example` for 
 ### Sync Settings
 
 All sync settings are configurable via environment variables:
-- **Sync Interval**: Default 90 seconds (configurable via `SYNC_INTERVAL_MS`)
+- **Reconciliation Interval**: Default 1 hour (configurable via `SYNC_INTERVAL_MS`); Fitness254 webhooks handle regular changes immediately.
 - **Batch Size**: Default 300 persons per batch (configurable via `SYNC_BATCH_SIZE`)
 - **Heartbeat**: Default daily at 20:30 (configurable via `HEARTBEAT_SCHEDULE` and `HEARTBEAT_TIMEZONE`)
 
@@ -133,4 +141,3 @@ The service uses efficient batch processing to fetch and sync large numbers of m
 ## License
 
 ISC
-

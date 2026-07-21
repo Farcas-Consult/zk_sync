@@ -136,8 +136,12 @@ export class ZKBioClient {
     return result.data || {};
   }
 
-  async updatePerson(pin: string, updateData: PersonUpdateData): Promise<ZKBioPerson> {
-    const currentPerson = await this.getPerson(pin);
+  async updatePerson(
+    pin: string,
+    updateData: PersonUpdateData,
+    prefetchedPerson?: ZKBioPerson
+  ): Promise<ZKBioPerson> {
+    const currentPerson = prefetchedPerson || (await this.getPerson(pin));
     if (!currentPerson) {
       throw new Error(`Person with PIN ${pin} not found`);
     }
@@ -238,4 +242,3 @@ export class ZKBioClient {
 }
 
 export const zkbioClient = new ZKBioClient();
-

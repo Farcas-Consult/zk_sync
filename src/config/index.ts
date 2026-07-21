@@ -45,10 +45,18 @@ export const config = {
     chatId: process.env.TELEGRAM_CHAT_ID || '',
   },
   sync: {
-    interval: parseInt(process.env.SYNC_INTERVAL_MS || '90000', 10), // Default: 1.5 minutes
+    // Webhooks handle routine changes. This is only a reconciliation safety net.
+    interval: Math.max(60_000, parseInt(process.env.SYNC_INTERVAL_MS || '3600000', 10)),
     batchSize: parseInt(process.env.SYNC_BATCH_SIZE || '300', 10),
     batchDelay: parseInt(process.env.SYNC_BATCH_DELAY_MS || '100', 10), // ms between batches
     operationDelay: parseInt(process.env.SYNC_OPERATION_DELAY_MS || '100', 10), // ms between operations
+  },
+  webhook: {
+    enabled: process.env.FITNESS254_WEBHOOK_ENABLED !== 'false',
+    host: process.env.WEBHOOK_HOST || process.env.FITNESS254_WEBHOOK_HOST || '0.0.0.0',
+    port: Math.max(1, parseInt(process.env.WEBHOOK_PORT || process.env.FITNESS254_WEBHOOK_PORT || '4000', 10)),
+    path: process.env.FITNESS254_WEBHOOK_PATH || '/fitness254/webhook',
+    secret: process.env.FITNESS254_WEBHOOK_SECRET || '',
   },
   issues: {
     apiUrl: process.env.ISSUE_API_URL || '',
@@ -107,4 +115,3 @@ export function validateConfig(): void {
     throw new Error(`Configuration errors:\n${errors.join('\n')}`);
   }
 }
-

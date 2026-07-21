@@ -60,6 +60,41 @@ export interface GymMember {
   isActive: boolean;
 }
 
+export type Fitness254WebhookEventType =
+  | 'webhook.test'
+  | 'member.created'
+  | 'member.updated'
+  | 'member.activated'
+  | 'member.deactivated'
+  | 'member.frozen'
+  | 'member.unfrozen'
+  | 'member.expired'
+  | 'member.cancelled'
+  | 'member.deleted';
+
+export interface Fitness254WebhookEvent {
+  id: string;
+  type: Fitness254WebhookEventType;
+  occurred_at: string;
+  gym: { id: string; name?: string; subdomain?: string };
+  data: {
+    message?: string;
+    member?: {
+      turnstile_id?: number | string | null;
+      account_status?: string | null;
+      membership_status?: string | null;
+      access_allowed?: boolean | null;
+      profile?: {
+        display_name?: string | null;
+        email?: string | null;
+        phone?: string | null;
+        gender?: string | null;
+        profile_image_url?: string | null;
+      } | null;
+    };
+  };
+}
+
 export interface GymApiResponse {
   success: boolean;
   data: GymMember[];
@@ -111,4 +146,3 @@ export type NotificationType =
   | 'fatal_error'
   | 'unhandled_error'
   | 'zkbio_batch_auth_error';
-

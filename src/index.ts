@@ -3,6 +3,7 @@ import { config, validateConfig } from './config/index.js';
 import { logger } from './utils/logger.js';
 import { telegramService } from './services/telegram.js';
 import { syncService } from './services/sync.js';
+import { fitness254WebhookServer } from './services/webhookServer.js';
 import { formatUptime } from './utils/helpers.js';
 
 async function sendHeartbeat(): Promise<void> {
@@ -48,6 +49,7 @@ function setupGracefulShutdown(): void {
         `<b>Uptime:</b> ${formatUptime(process.uptime())}\n\n` +
         `Service stopped ${signal === 'SIGINT' ? 'manually' : 'by system'}.`
     );
+    await fitness254WebhookServer.stop();
     logger.close();
     process.exit(0);
   };
@@ -68,6 +70,7 @@ function setupGracefulShutdown(): void {
     );
 
     setTimeout(() => {
+      void fitness254WebhookServer.stop();
       logger.close();
       process.exit(1);
     }, 3000);
@@ -107,7 +110,7 @@ async function main(): Promise<void> {
           : `<b>HikCentral Server:</b> ${config.hikvision.baseUrl}\n`) +
         `<b>Gym API:</b> ${config.gym.apiUrl}\n` +
         `<b>Start Time:</b> ${new Date().toLocaleString()}\n` +
-        `<b>Sync Interval:</b> Every ${config.sync.interval / 1000} seconds\n` +
+        `<b>Reconciliation Sync:</b> Every ${config.sync.interval / 1000} seconds\n` +
         `<b>Heartbeat:</b> Daily at ${config.notifications.heartbeatSchedule}\n` +
         `<b>Performance:</b> Batch processing (${config.sync.batchSize} per batch)\n\n` +
         `System initialized with optimized batch processing for faster syncs.`
@@ -115,13 +118,16 @@ async function main(): Promise<void> {
 
     setupHeartbeat();
     setupGracefulShutdown();
+    if (config.gym.apiSource === 'fitness254') {
+      await fitness254WebhookServer.start();
+    }
 
     logger.info('Performing initial data sync...');
     await syncService.sync();
 
     setInterval(async () => {
       try {
-        logger.info('Running periodic sync...');
+        logger.info('Running reconciliation sync...');
         await syncService.sync();
       } catch (error) {
         logger.error('Periodic sync error', error as Error);
@@ -129,7 +135,7 @@ async function main(): Promise<void> {
     }, config.sync.interval);
 
     logger.info(
-      `${config.gym.name} integration started successfully. Running periodic sync every ${config.sync.interval / 1000} seconds...`
+      `${config.gym.name} integration started successfully. Reconciliation runs every ${config.sync.interval / 1000} seconds.`
     );
   } catch (error) {
     logger.error('Failed to start application', error as Error);
@@ -148,4 +154,3 @@ async function main(): Promise<void> {
 }
 
 main();
-

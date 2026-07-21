@@ -209,7 +209,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
       mobilePhone: phone,
       personPhoto: personPhoto,
       gender: member.gender || undefined,
-    });
+    }, existingPerson);
   }
 
   private async createMember(
@@ -259,4 +259,3 @@ export class ZKBioAccessControlClient implements AccessControlClient {
 }
 
 export const zkbioAccessControlClient = new ZKBioAccessControlClient();
-

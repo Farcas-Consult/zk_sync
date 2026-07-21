@@ -28,6 +28,12 @@ export interface AccessControlClient {
   ): Promise<Record<string, AccessControlPersonSnapshot>>;
 
   /**
+   * Look up exactly one person for an incremental webhook update. Implementations
+   * should use this instead of an all-person prefetch when available.
+   */
+  lookupExistingPerson?(externalId: string): Promise<AccessControlPersonSnapshot | null>;
+
+  /**
    * Ensure a member exists with up-to-date profile and access attributes.
    * Implementations should be idempotent.
    */
@@ -53,4 +59,3 @@ export interface AccessControlClient {
    */
   flushChanges(): Promise<void>;
 }
-

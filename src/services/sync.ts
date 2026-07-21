@@ -13,7 +13,19 @@ import { createGymAdapter } from './gymAdapter.js';
 const FITNESS254_MAX_PAGES = 5000;
 
 export class SyncService {
+  private operationChain: Promise<void> = Promise.resolve();
+  private memberSnapshots = new Map<string, AccessControlPersonSnapshot>();
+
   constructor(private readonly accessClient: AccessControlClient) {}
+
+  private runExclusively<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationChain.then(operation, operation);
+    this.operationChain = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
 
   async fetchGymMembers(): Promise<GymMember[]> {
     logger.info('Fetching gym members data...');
@@ -159,6 +171,15 @@ export class SyncService {
   }
 
   async sync(): Promise<void> {
+    return this.runExclusively(() => this.syncAll());
+  }
+
+  /** Process one member supplied by Fitness254 without fetching either full member list. */
+  async syncMember(member: GymMember): Promise<void> {
+    return this.runExclusively(() => this.syncOneMember(member));
+  }
+
+  private async syncAll(): Promise<void> {
     const startTime = Date.now();
 
     const runIssues = new Map<string, MemberIssuePayload>();
@@ -193,6 +214,7 @@ export class SyncService {
 
       try {
         existingSnapshots = await this.accessClient.prefetchExistingPersons(allExternalIds);
+        this.memberSnapshots = new Map(Object.entries(existingSnapshots));
         const batchWorked = Object.keys(existingSnapshots).length > 0 || allExternalIds.length === 0;
 
         if (!batchWorked && allExternalIds.length > 0) {
@@ -264,6 +286,57 @@ export class SyncService {
     }
   }
 
+  private async syncOneMember(member: GymMember): Promise<void> {
+    const startTime = Date.now();
+    const issues = new Map<string, MemberIssuePayload>();
+    const addRunIssue = (issue: MemberIssuePayload) => {
+      const key = `${issue.turnstileId}:${issue.errorCode ?? 'null'}:${issue.errorType}`;
+      const existing = issues.get(key);
+      const now = new Date().toISOString();
+      if (existing) {
+        existing.count = (existing.count ?? 1) + 1;
+        existing.lastSeen = now;
+        existing.errorMessage = issue.errorMessage;
+      } else {
+        issues.set(key, { ...issue, firstSeen: issue.firstSeen ?? now, lastSeen: issue.lastSeen ?? now, count: 1 });
+      }
+    };
+
+    const externalId = member.turnstileId.toString();
+    try {
+      // Let the normal validation/reporting path reject malformed events without an avoidable provider lookup.
+      if (!member.fullName.trim()) {
+        await this.processMember(member, {}, addRunIssue);
+        const issuesToSend = Array.from(issues.values());
+        if (issuesToSend.length > 0) await issueReporter.reportBatch(issuesToSend);
+        return;
+      }
+
+      let snapshot = this.memberSnapshots.get(externalId);
+      if (!snapshot) {
+        // A one-person lookup is the only access-control read required for a cold webhook event.
+        if (this.accessClient.lookupExistingPerson) {
+          snapshot = (await this.accessClient.lookupExistingPerson(externalId)) || undefined;
+        } else {
+          const fetched = await this.accessClient.prefetchExistingPersons([externalId]);
+          snapshot = fetched[externalId];
+        }
+        if (snapshot) this.memberSnapshots.set(externalId, snapshot);
+      }
+
+      await this.processMember(member, snapshot ? { [externalId]: snapshot } : {}, addRunIssue);
+      await this.accessClient.flushChanges();
+      this.memberSnapshots.delete(externalId); // event may have changed the remote record; avoid stale comparisons
+
+      const issuesToSend = Array.from(issues.values());
+      if (issuesToSend.length > 0) await issueReporter.reportBatch(issuesToSend);
+      logger.info(`Webhook member sync completed for ${externalId} in ${Date.now() - startTime}ms`);
+    } catch (error) {
+      this.memberSnapshots.delete(externalId);
+      throw error;
+    }
+  }
+
   private async processMember(
     member: GymMember,
     existingSnapshots: Record<string, AccessControlPersonSnapshot>,
@@ -330,4 +403,3 @@ export class SyncService {
 }
 
 export const syncService = new SyncService(accessControlClient);
-

@@ -45,6 +45,18 @@ export class HikvisionAccessControlClient implements AccessControlClient {
   private privilegeDeleteQueue = new Map<string, Set<string>>();
   private skippedProfileUpdates = 0;
 
+  async lookupExistingPerson(externalId: string): Promise<AccessControlPersonSnapshot | null> {
+    const personId = await this.getPersonIdByPersonCode(externalId);
+    if (!personId) return null;
+    return {
+      externalId,
+      personId,
+      // The exact person-code endpoint supplies identity, not the full profile.
+      // ensureMember will perform one targeted update for the incoming event.
+      raw: { personId, personCode: externalId },
+    };
+  }
+
   async prefetchExistingPersons(
     _externalIds: string[]
   ): Promise<Record<string, AccessControlPersonSnapshot>> {
@@ -547,4 +559,3 @@ export class HikvisionAccessControlClient implements AccessControlClient {
 }
 
 export const hikvisionAccessControlClient = new HikvisionAccessControlClient();
-
