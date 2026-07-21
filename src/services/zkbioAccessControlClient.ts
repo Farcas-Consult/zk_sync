@@ -59,9 +59,10 @@ export class ZKBioAccessControlClient implements AccessControlClient {
         firstName,
         lastName,
         accessLevelIds,
-        deptCode
+        deptCode,
+        context
       )
-      : await this.createMember(member, firstName, lastName, accessLevelIds, deptCode);
+      : await this.createMember(member, firstName, lastName, accessLevelIds, deptCode, context);
 
     if (changed) {
       logger.info(
@@ -157,7 +158,8 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     firstName: string,
     lastName: string,
     accessLevelIds: string,
-    deptCode: string
+    deptCode: string,
+    context: AccessControlContext
   ): Promise<boolean> {
     const personPin = member.turnstileId.toString();
     const currentAccessLevel = existingPerson.accLevelIds;
@@ -175,30 +177,23 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     const deptCodeChanged = existingPerson.deptCode !== deptCode;
     const genderChanged = member.gender !== null && existingPerson.gender !== member.gender;
 
-    const needsUpdate =
+    const needsNonPhotoUpdate =
       existingPerson.name !== firstName ||
       existingPerson.lastName !== lastName ||
       existingPerson.email !== email ||
       existingPerson.mobilePhone !== phone ||
       accessLevelChanged ||
       deptCodeChanged ||
-      genderChanged ||
-      needsPhotoUpdate;
-
-    if (!needsUpdate) {
-      return false;
-    }
+      genderChanged;
 
     let personPhoto: string | undefined;
-    if (hasPhotoUrl && member.profilePictureUrl) {
-      try {
-        personPhoto = await photoCache.getOrFetchBase64(member.turnstileId, member.profilePictureUrl);
-        logger.info(`Converted photo URL to base64 for member ${member.turnstileId} (with cache)`);
-      } catch (error) {
-        const err = error as Error;
-        logger.error(`Failed to convert photo URL to base64 for member ${member.turnstileId}`, err);
-        throw new Error(`Photo conversion failed: ${err.message}`);
-      }
+    if (needsPhotoUpdate && member.profilePictureUrl) {
+      personPhoto = await this.getPhotoOrReport(member, member.profilePictureUrl, context);
+    }
+
+    // A failed photo download must not turn an otherwise unchanged member into a write on every run.
+    if (!needsNonPhotoUpdate && !personPhoto) {
+      return false;
     }
 
     await zkbioClient.updatePerson(personPin, {
@@ -219,7 +214,8 @@ export class ZKBioAccessControlClient implements AccessControlClient {
     firstName: string,
     lastName: string,
     accessLevelIds: string,
-    deptCode: string
+    deptCode: string,
+    context: AccessControlContext
   ): Promise<boolean> {
     if (firstName === 'Unknown') {
       logger.warn(`Cannot create ${member.turnstileId} - invalid name`);
@@ -228,14 +224,7 @@ export class ZKBioAccessControlClient implements AccessControlClient {
 
     let personPhoto: string | undefined;
     if (member.profilePictureUrl && member.profilePictureUrl !== null && member.profilePictureUrl !== '') {
-      try {
-        personPhoto = await photoCache.getOrFetchBase64(member.turnstileId, member.profilePictureUrl);
-        logger.info(`Converted photo URL to base64 for member ${member.turnstileId} (with cache)`);
-      } catch (error) {
-        const err = error as Error;
-        logger.error(`Failed to convert photo URL to base64 for member ${member.turnstileId}`, err);
-        throw new Error(`Photo conversion failed: ${err.message}`);
-      }
+      personPhoto = await this.getPhotoOrReport(member, member.profilePictureUrl, context);
     }
 
     const personData = {
@@ -258,6 +247,31 @@ export class ZKBioAccessControlClient implements AccessControlClient {
       `Created ${member.turnstileId} (${member.fullName}) - access: ${accessLevelIds ? 'granted' : 'revoked'}`
     );
     return true;
+  }
+
+  /** Photo failures are non-fatal: membership access is more important than a profile image. */
+  private async getPhotoOrReport(
+    member: GymMember,
+    photoUrl: string,
+    context: AccessControlContext
+  ): Promise<string | undefined> {
+    try {
+      const photo = await photoCache.getOrFetchBase64(member.turnstileId, photoUrl);
+      logger.info(`Converted photo URL to base64 for member ${member.turnstileId} (with cache)`);
+      return photo;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`Skipping invalid profile photo for member ${member.turnstileId}: ${message}`);
+      memberIssuesLogger.logIssue(member.turnstileId, member.fullName, null, 'photo_conversion_error', message);
+      context.reportIssue({
+        turnstileId: member.turnstileId,
+        fullName: member.fullName,
+        errorCode: null,
+        errorType: 'photo_conversion_error',
+        errorMessage: message,
+      });
+      return undefined;
+    }
   }
 }
 

@@ -375,6 +375,7 @@ export class SyncService {
     const context = {
       shouldHaveAccess,
       isFemale,
+      reportIssue: addRunIssue,
     };
 
     try {

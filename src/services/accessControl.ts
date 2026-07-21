@@ -14,6 +14,7 @@ export interface AccessControlPersonSnapshot {
 export interface AccessControlContext {
   shouldHaveAccess: boolean;
   isFemale: boolean;
+  reportIssue: (issue: MemberIssuePayload) => void;
 }
 
 export interface AccessControlClient {

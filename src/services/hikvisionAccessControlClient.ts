@@ -4,6 +4,7 @@ import { config, httpsAgent } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { photoCache } from '../utils/photoCache.js';
 import { parseName } from '../utils/helpers.js';
+import { memberIssuesLogger } from '../utils/memberIssuesLogger.js';
 import type { GymMember } from '../types/index.js';
 import type {
   AccessControlClient,
@@ -133,9 +134,16 @@ export class HikvisionAccessControlClient implements AccessControlClient {
         faceData = await photoCache.getOrFetchBase64(member.turnstileId, member.profilePictureUrl);
         logger.info(`Converted photo URL to base64 for member ${member.turnstileId} (Hikvision)`);
       } catch (error) {
-        const err = error as Error;
-        logger.error(`Failed to convert photo URL to base64 for member ${member.turnstileId} (Hikvision)`, err);
-        throw new Error(`Photo conversion failed: ${err.message}`);
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn(`Skipping invalid profile photo for member ${member.turnstileId} (Hikvision): ${message}`);
+        memberIssuesLogger.logIssue(member.turnstileId, member.fullName, null, 'photo_conversion_error', message);
+        context.reportIssue({
+          turnstileId: member.turnstileId,
+          fullName: member.fullName,
+          errorCode: null,
+          errorType: 'photo_conversion_error',
+          errorMessage: message,
+        });
       }
     }
 
